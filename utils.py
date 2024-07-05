@@ -24,34 +24,37 @@ class EpisodicDataset(torch.utils.data.Dataset):
         sample_full_episode = False # hardcode
 
         episode_id = self.episode_ids[index]
-        dataset_path = os.path.join(self.dataset_dir, f'episode_{episode_id}.hdf5')
+        dataset_path = os.path.join(self.dataset_dir, f'traj_{episode_id}.h5')#f'episode_{episode_id}.hdf5')
         with h5py.File(dataset_path, 'r') as root:
-            is_sim = root.attrs['sim']
-            original_action_shape = root['/action'].shape
+            is_sim = False #root.attrs['sim']
+            original_action_shape = root['/dict_str_traj_0/dict_str_actions'].shape#root['/action'].shape
             episode_len = original_action_shape[0]
             if sample_full_episode:
                 start_ts = 0
             else:
                 start_ts = np.random.choice(episode_len)
             # get observation at start_ts only
-            qpos = root['/observations/qpos'][start_ts]
-            qvel = root['/observations/qvel'][start_ts]
+            qpos = root['/dict_str_traj_0/dict_str_obs/dict_str_state'][start_ts]#root['/observations/qpos'][start_ts]
+            qvel = root['/dict_str_traj_0/dict_str_obs/dict_str_state'][start_ts]#root['/observations/qvel'][start_ts]# not to use learning but just write
             image_dict = dict()
             for cam_name in self.camera_names:
-                image_dict[cam_name] = root[f'/observations/images/{cam_name}'][start_ts]
+                image_dict[cam_name] = np.transpose(root['/dict_str_traj_0/dict_str_obs/dict_str_rgb'][start_ts][0], (1, 2, 0))#root[f'/observations/images/{cam_name}'][start_ts]
+                
             # get all actions after and including start_ts
             if is_sim:
-                action = root['/action'][start_ts:]
+                action = root['/dict_str_traj_0/dict_str_actions'][start_ts:]#root['/action'][start_ts:]
                 action_len = episode_len - start_ts
             else:
-                action = root['/action'][max(0, start_ts - 1):] # hack, to make timesteps more aligned
-                action_len = episode_len - max(0, start_ts - 1) # hack, to make timesteps more aligned
+                start = max(0, start_ts - 1)
+                end = start + 150
+                action = root['/dict_str_traj_0/dict_str_actions'][start: end]#root['/action'][max(0, start_ts - 1):] # hack, to make timesteps more aligned
+                action_len = 150#episode_len - max(0, start_ts - 1) # hack, to make timesteps more aligned
 
         self.is_sim = is_sim
-        padded_action = np.zeros(original_action_shape, dtype=np.float32)
-        padded_action[:action_len] = action
-        is_pad = np.zeros(episode_len)
-        is_pad[action_len:] = 1
+        padded_action = np.zeros((150, original_action_shape[1]), dtype=np.float32)#np.zeros(original_action_shape, dtype=np.float32)
+        padded_action[:len(action)] = action#[:action_len] = action
+        is_pad = np.zeros(150)#np.zeros(episode_len)
+        is_pad[len(action):] = 1#[action_len:] = 1
 
         # new axis for different cameras
         all_cam_images = []
@@ -73,18 +76,18 @@ class EpisodicDataset(torch.utils.data.Dataset):
         action_data = (action_data - self.norm_stats["action_mean"]) / self.norm_stats["action_std"]
         qpos_data = (qpos_data - self.norm_stats["qpos_mean"]) / self.norm_stats["qpos_std"]
 
-        return image_data, qpos_data, action_data, is_pad
+        return image_data.float(), qpos_data.float(), action_data.float(), is_pad
 
 
 def get_norm_stats(dataset_dir, num_episodes):
     all_qpos_data = []
     all_action_data = []
     for episode_idx in range(num_episodes):
-        dataset_path = os.path.join(dataset_dir, f'episode_{episode_idx}.hdf5')
+        dataset_path = os.path.join(dataset_dir, f'traj_{episode_idx}.h5')#f'episode_{episode_idx}.hdf5')
         with h5py.File(dataset_path, 'r') as root:
-            qpos = root['/observations/qpos'][()]
-            qvel = root['/observations/qvel'][()]
-            action = root['/action'][()]
+            qpos = root['/dict_str_traj_0/dict_str_obs/dict_str_state'][:150]#root['/observations/qpos'][()]
+            qvel = root['/dict_str_traj_0/dict_str_obs/dict_str_state'][:150]#root['/observations/qvel'][()]
+            action = action = root['/dict_str_traj_0/dict_str_actions'][:150]#root['/action'][()]
         all_qpos_data.append(torch.from_numpy(qpos))
         all_action_data.append(torch.from_numpy(action))
     all_qpos_data = torch.stack(all_qpos_data)
