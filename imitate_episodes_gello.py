@@ -231,7 +231,7 @@ def eval_bc(config, ckpt_name, save_episode=True):
         elif 'sim_insertion' in task_name:
             BOX_POSE[0] = np.concatenate(sample_insertion_pose()) # used in sim reset
 
-        t/s = env.reset()
+        # ts = env.reset()
 
         ### onscreen render
         # if onscreen_render:
@@ -299,14 +299,14 @@ def eval_bc(config, ckpt_name, save_episode=True):
                 target_qpos = action
 
                 ### step the environment
-                ts = env.step(target_qpos)
+                env.step(target_qpos) # ts = env.step(target_qpos)
 
                 ### for visualization
                 qpos_list.append(qpos_numpy)
                 target_qpos_list.append(target_qpos)
                 rewards.append(ts.reward)
 
-            plt.close()
+            # plt.close()
         if real_robot:
             move_grippers([env.puppet_bot_left, env.puppet_bot_right], [PUPPET_GRIPPER_JOINT_OPEN] * 2, move_time=0.5)  # open
             pass
@@ -462,7 +462,7 @@ if __name__ == '__main__':
     parser.add_argument('--temporal_agg', action='store_true')
     
     # for gello
-    parser.add_argument('--gello_dir', action='store', default='../gello_software', type=str,  required=True)
+    parser.add_argument('--gello_dir', action='store', default='../gello_software', type=str)
 
 
     main(vars(parser.parse_args()))
