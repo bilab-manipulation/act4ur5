@@ -106,7 +106,7 @@ def main(args):
         'seed': args['seed'],
         'temporal_agg': args['temporal_agg'],
         'camera_names': camera_names,
-        'real_robot': not is_sim
+        'real_robot': not is_sim,
         'gello_env': env 
     }
 
@@ -160,11 +160,15 @@ def make_optimizer(policy_class, policy):
     return optimizer
 
 
-def get_image(ts, camera_names):
+def get_image(obs, camera_names):
     curr_images = []
-    for cam_name in camera_names:
-        curr_image = rearrange(ts.observation['images'][cam_name], 'h w c -> c h w')
-        curr_images.append(curr_image)
+    # 0705, For this time we just use wrist_rgb so...
+    curr_image = rearrange(obs['wrist_rgb'], 'h w c -> c h w')
+    curr_images.append(curr_image)
+
+    # for cam_name in camera_names:
+    #     curr_image = rearrange(ts.observation['images'][cam_name], 'h w c -> c h w')
+    #     curr_images.append(curr_image)
     curr_image = np.stack(curr_images, axis=0)
     curr_image = torch.from_numpy(curr_image / 255.0).float().cuda().unsqueeze(0)
     return curr_image
@@ -270,7 +274,7 @@ def eval_bc(config, ckpt_name, save_episode=True):
                 qpos = pre_process(qpos_numpy)
                 qpos = torch.from_numpy(qpos).float().cuda().unsqueeze(0)
                 qpos_history[:, t] = qpos
-                curr_image = get_image(ts, camera_names)
+                curr_image = get_image(obs, camera_names)
 
                 ### query policy
                 if config['policy_class'] == "ACT":
@@ -304,7 +308,8 @@ def eval_bc(config, ckpt_name, save_episode=True):
                 ### for visualization
                 qpos_list.append(qpos_numpy)
                 target_qpos_list.append(target_qpos)
-                rewards.append(ts.reward)
+                # rewards.append(ts.reward)
+                rewards.append(0)
 
             # plt.close()
         if real_robot:
