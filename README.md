@@ -44,6 +44,7 @@ You can find all scripted/human demo for simulated environments [here](https://d
     pip install h5py
     pip install ipython
     cd act/detr && pip install -e .
+    pip install zmq
 
 ### Example Usages
 
