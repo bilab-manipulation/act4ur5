@@ -7,7 +7,7 @@ SIM_TASK_CONFIGS = {
         'dataset_dir': DATA_DIR + '/pilot',
         'num_episodes': 50,
         'episode_len': 150,
-        'camera_names': ['top']
+        'camera_names': ['wrist', 'base']
     },
 
 

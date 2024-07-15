@@ -32,7 +32,7 @@ def main(args):
             # you can optionally add camera nodes here for imitation learning purposes
             # "wrist": ZMQClientCamera(port=args.wrist_camera_port, host=args.hostname),
             # "base": ZMQClientCamera(port=args.base_camera_port, host=args.hostname),
-            "wrist": LogitechCamera(device_id='/dev/video2')
+            "wrist": LogitechCamera(device_id='/dev/video0')
         }
         robot_client = ZMQClientRobot(port=6001, host="127.0.0.1")
         env = RobotEnv(robot_client, control_rate_hz=100, camera_dict=camera_clients)
@@ -111,7 +111,7 @@ def main(args):
     }
 
     if is_eval:
-        ckpt_names = [f'policy_best.ckpt']
+        ckpt_names = [f'policy_epoch_1200_seed_0.ckpt'] #ckpt_names = [f'policy_best.ckpt'] 
         results = []
         for ckpt_name in ckpt_names:
             success_rate, avg_return = eval_bc(config, ckpt_name, save_episode=True)
@@ -301,7 +301,6 @@ def eval_bc(config, ckpt_name, save_episode=True):
                 raw_action = raw_action.squeeze(0).cpu().numpy()
                 action = post_process(raw_action)
                 target_qpos = action
-
                 ### step the environment
                 env.step(target_qpos) # ts = env.step(target_qpos)
 
@@ -312,8 +311,9 @@ def eval_bc(config, ckpt_name, save_episode=True):
                 rewards.append(0)
 
             # plt.close()
+        
         if real_robot:
-            move_grippers([env.puppet_bot_left, env.puppet_bot_right], [PUPPET_GRIPPER_JOINT_OPEN] * 2, move_time=0.5)  # open
+            # move_grippers([env.puppet_bot_left, env.puppet_bot_right], [PUPPET_GRIPPER_JOINT_OPEN] * 2, move_time=0.5)  # open
             pass
 
         rewards = np.array(rewards)
@@ -325,6 +325,8 @@ def eval_bc(config, ckpt_name, save_episode=True):
 
         if save_episode:
             save_videos(image_list, DT, video_path=os.path.join(ckpt_dir, f'video{rollout_id}.mp4'))
+    
+    
 
     success_rate = np.mean(np.array(highest_rewards) == env_max_reward)
     avg_return = np.mean(episode_returns)
