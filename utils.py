@@ -36,7 +36,7 @@ class EpisodicDataset(torch.utils.data.Dataset):
             qpos = root[f'/dict_str_traj_{episode_idx}/dict_str_obs/dict_str_state'][start_ts]#root['/observations/qpos'][start_ts]
             qvel = root[f'/dict_str_traj_{episode_idx}/dict_str_obs/dict_str_state'][start_ts]#root['/observations/qvel'][start_ts]# not to use learning but just write
             image_dict = dict()
-            assert root[f'/dict_str_traj_{episode_idx}/dict_str_obs/dict_str_rgb'].shape[1] == len(self.camera_names), f"camera num different: {self.camera_names.shape}"
+            assert root[f'/dict_str_traj_{episode_idx}/dict_str_obs/dict_str_rgb'].shape[1] == len(self.camera_names), f"camera num different: {self.camera_names}"
             for i, cam_name in enumerate(self.camera_names):
                 image_dict[cam_name] = np.transpose(root[f'/dict_str_traj_{episode_idx}/dict_str_obs/dict_str_rgb'][start_ts][1], (1, 2, 0))#root[f'/observations/images/{cam_name}'][start_ts]
                 
