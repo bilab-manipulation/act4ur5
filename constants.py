@@ -5,9 +5,11 @@ DATA_DIR = '.'#'<put your data dir here>'
 SIM_TASK_CONFIGS = {
     'pilot':{
         'dataset_dir': DATA_DIR + '/pilot',
-        'num_episodes': 56,
+        'num_episodes': 50,
         'episode_len': 150,
-        'camera_names': ['wrist', 'base']
+        # 'camera_names': ['wrist', 'base'], # 순서 중요, 카메라 두개일 때
+        'camera_names': ['wrist'], # 카메라 한개일 때
+        'ckpt_names': [f'policy_best.ckpt']
     },
 
 

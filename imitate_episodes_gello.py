@@ -23,23 +23,6 @@ import IPython
 e = IPython.embed
 
 def main(args):
-    if os.path.isdir(args['gello_dir']):
-        sys.path.append(args['gello_dir'])
-        from gello.env import RobotEnv
-        from gello.zmq_core.robot_node import ZMQClientRobot
-        from gello.cameras.realsense_camera import LogitechCamera
-        camera_clients = {
-            # you can optionally add camera nodes here for imitation learning purposes
-            # "wrist": ZMQClientCamera(port=args.wrist_camera_port, host=args.hostname),
-            # "base": ZMQClientCamera(port=args.base_camera_port, host=args.hostname),
-            "wrist": LogitechCamera(device_id='/dev/video0')
-        }
-        robot_client = ZMQClientRobot(port=6001, host="127.0.0.1")
-        env = RobotEnv(robot_client, control_rate_hz=100, camera_dict=camera_clients)
-
-    else:
-        print("GELLO DIRECTORY WRONG")
-        exit(1)
 
     set_seed(1)
     # command line parameters
@@ -66,6 +49,42 @@ def main(args):
     num_episodes = task_config['num_episodes']
     episode_len = task_config['episode_len']
     camera_names = task_config['camera_names']
+
+
+    if os.path.isdir(args['gello_dir']):
+        sys.path.append(args['gello_dir'])
+        from gello.env import RobotEnv
+        from gello.zmq_core.robot_node import ZMQClientRobot
+        from gello.cameras.realsense_camera import LogitechCamera, RealSenseCamera
+        
+        if len(camera_names) == 1:
+            camera_clients = {
+                # you can optionally add camera nodes here for imitation learning purposes
+                # "wrist": ZMQClientCamera(port=args.wrist_camera_port, host=args.hostname),
+                # "base": ZMQClientCamera(port=args.base_camera_port, host=args.hostname),
+                # "wrist": LogitechCamera(device_id='/dev/video0')
+                "wrist": LogitechCamera(device_id='/dev/video0')
+            }
+        elif len(camera_names) == 2:
+            camera_clients = {
+                # you can optionally add camera nodes here for imitation learning purposes
+                # "wrist": ZMQClientCamera(port=args.wrist_camera_port, host=args.hostname),
+                # "base": ZMQClientCamera(port=args.base_camera_port, host=args.hostname),
+                # "wrist": LogitechCamera(device_id='/dev/video0')
+                "wrist": RealSenseCamera(),
+                "base": LogitechCamera(device_id='/dev/video0')
+            }
+        else:
+            raise NotImplementedError
+
+        robot_client = ZMQClientRobot(port=6001, host="127.0.0.1")
+        env = RobotEnv(robot_client, control_rate_hz=100, camera_dict=camera_clients)
+
+    else:
+        print("GELLO DIRECTORY WRONG")
+        exit(1)
+
+    
 
     # fixed parameters
     state_dim = 7#14
@@ -111,7 +130,7 @@ def main(args):
     }
 
     if is_eval:
-        ckpt_names = [f'policy_best.ckpt'] #ckpt_names = [f'policy_best.ckpt'] 
+        ckpt_names = task_config['ckpt_names'] #ckpt_names = [f'policy_best.ckpt'] 
         results = []
         for ckpt_name in ckpt_names:
             success_rate, avg_return = eval_bc(config, ckpt_name, save_episode=True)
@@ -163,9 +182,9 @@ def make_optimizer(policy_class, policy):
 def get_image(obs, camera_names):
     curr_images = []
     # 0705, For this time we just use wrist_rgb so...
-    curr_image = rearrange(obs['wrist_rgb'], 'h w c -> c h w')
-    curr_images.append(curr_image)
-
+    for camera_name in camera_names:
+        curr_image = rearrange(obs[f'{camera_name}_rgb'], 'h w c -> c h w')
+        curr_images.append(curr_image)
     # for cam_name in camera_names:
     #     curr_image = rearrange(ts.observation['images'][cam_name], 'h w c -> c h w')
     #     curr_images.append(curr_image)
