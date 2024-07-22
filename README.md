@@ -1,5 +1,14 @@
 # ACT: Action Chunking with Transformers
 
+### 데모 시 주의사항
+1. ``constants.py`` ``SIM_TASK_CONFIGS`` ``'pilot'`` dict에서 카메라 개수확인 및 (eval 시) ckpt_names 꼭 수정 
+   - 'camera_names': ['wrist', 'base'], # 순서 중요, 카메라 두개일 때
+   - 'camera_names': ['wrist'], # 카메라 한개일 때
+   - 'ckpt_names': [f'policy_best.ckpt']
+
+train & eval 코드는 하단 참고
+     
+
 ### *New*: [ACT tuning tips](https://docs.google.com/document/d/1FVIZfoALXg_ZkYKaYVh-qOlaXveq5CtvJHXkY25eYhs/edit?usp=sharing)
 TL;DR: if your ACT policy is jerky or pauses in the middle of an episode, just train for longer! Success rate and smoothness can improve way after loss plateaus.
 
