@@ -147,3 +147,5 @@ dmypy.json
 .pyre/
 
 ckpt/
+
+sim_transfer_cube_scripted/
