@@ -150,3 +150,5 @@ ckpt/
 *.zip
 artifact/
 
+
+sim_transfer_cube_scripted/
