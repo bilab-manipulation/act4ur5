@@ -38,7 +38,7 @@ class EpisodicDataset(torch.utils.data.Dataset):
             image_dict = dict()
             assert root[f'/dict_str_traj_{episode_idx}/dict_str_obs/dict_str_rgb'].shape[1] == len(self.camera_names), f"camera num different: {self.camera_names}"
             for i, cam_name in enumerate(self.camera_names):
-                image_dict[cam_name] = np.transpose(root[f'/dict_str_traj_{episode_idx}/dict_str_obs/dict_str_rgb'][start_ts][1], (1, 2, 0))#root[f'/observations/images/{cam_name}'][start_ts]
+                image_dict[cam_name] = np.transpose(root[f'/dict_str_traj_{episode_idx}/dict_str_obs/dict_str_rgb'][start_ts][i], (1, 2, 0))#root[f'/observations/images/{cam_name}'][start_ts]
                 
             # get all actions after and including start_ts
             if is_sim:

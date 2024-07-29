@@ -8,6 +8,8 @@ from copy import deepcopy
 from tqdm import tqdm
 from einops import rearrange
 
+import pdb
+
 from constants import DT
 from constants import PUPPET_GRIPPER_JOINT_OPEN
 from utils import load_data # data functions
@@ -15,13 +17,76 @@ from utils import sample_box_pose, sample_insertion_pose # robot functions
 from utils import compute_dict_mean, set_seed, detach_dict # helper functions
 from policy import ACTPolicy, CNNMLPPolicy
 from visualize_episodes import save_videos
-
+import matplotlib.pyplot as plt
+import time
 from sim_env import BOX_POSE
+import sys
 
 import IPython
 e = IPython.embed
 
+
+
+# runcode
+# conda activate gello
+# python experiments/launch_nodes.py --robot=ur
+
+# conda activate aloha
+# python3 demo_first_complete.py --task_name pilot --ckpt_dir ckpt_pepero_1500 --policy_class ACT --kl_weight 10 --chunk_size 100 --hidden_dim 512 --batch_size 64 --dim_feedforward 3200 --num_epochs 2000  --lr 5e-5 --seed 0 --eval --temporal_agg
+
+def forward_kine(joint_angles):
+    def dh_transform(a, d, alpha, theta):
+        """
+        Calculate the DH transformation matrix.
+        a: link length
+        d: link offset
+        alpha: link twist
+        theta: joint angle
+        """
+        return np.array([
+            [np.cos(theta), -np.sin(theta)*np.cos(alpha), np.sin(theta)*np.sin(alpha), a*np.cos(theta)],
+            [np.sin(theta), np.cos(theta)*np.cos(alpha), -np.cos(theta)*np.sin(alpha), a*np.sin(theta)],
+            [0, np.sin(alpha), np.cos(alpha), d],
+            [0, 0, 0, 1]
+        ])
+
+    def calculate_gripper_height(joint_angles):
+        """
+        Calculate the height of the gripper base from the ground.
+        joint_angles: list of 6 joint angles in radians
+        """
+        # DH parameters: [a, d, alpha]
+        dh_params = [
+            [0.0000, 0.1625, np.pi/2],
+            [-0.4250, 0.0000, 0],
+            [-0.3922, 0.0000, 0],
+            [0.0000, 0.1333, np.pi/2],
+            [0.0000, 0.0997, -np.pi/2],
+            [0.0000, 0.0996, 0]
+        ]
+        
+        # Initialize the transformation matrix
+        T = np.eye(4)
+        
+        # Iterate through each joint and apply the DH transformation
+        for i in range(6):
+            a, d, alpha = dh_params[i]
+            theta = joint_angles[i]
+            T = np.dot(T, dh_transform(a, d, alpha, theta))
+        
+        # The z-coordinate of the gripper base is the height from the ground
+        gripper_height = T[2, 3]
+        return gripper_height
+
+    # Example usage
+    height = calculate_gripper_height(joint_angles)
+    return height
+
+
+
+
 def main(args):
+
     set_seed(1)
     # command line parameters
     is_eval = args['eval']
@@ -47,7 +112,49 @@ def main(args):
     num_episodes = task_config['num_episodes']
     episode_len = task_config['episode_len']
     camera_names = task_config['camera_names']
-    is_ft = task_config['is_ft']
+
+
+    if os.path.isdir(args['gello_dir']):
+        sys.path.append(args['gello_dir'])
+        from gello.env import RobotEnv # type: ignore
+        from gello.zmq_core.robot_node import ZMQClientRobot # type: ignore
+        from gello.cameras.realsense_camera import LogitechCamera, RealSenseCamera # type: ignore
+        
+        if len(camera_names) == 1:
+            camera_clients = {
+                # you can optionally add camera nodes here for imitation learning purposes
+                # "wrist": ZMQClientCamera(port=args.wrist_camera_port, host=args.hostname),
+                # "base": ZMQClientCamera(port=args.base_camera_port, host=args.hostname),
+                # "wrist": LogitechCamera(device_id='/dev/video0')
+                "wrist": LogitechCamera(device_id='/dev/video2')
+            }
+        elif len(camera_names) == 2:
+            camera_clients = {
+                # you can optionally add camera nodes here for imitation learning purposes
+                # "wrist": ZMQClientCamera(port=args.wrist_camera_port, host=args.hostname),
+                # "base": ZMQClientCamera(port=args.base_camera_port, host=args.hostname),
+                # "wrist": LogitechCamera(device_id='/dev/video0')
+                "wrist": RealSenseCamera(),
+                "base": LogitechCamera(device_id='/dev/video0')
+            }
+        else:
+            raise NotImplementedError
+
+        robot_client = ZMQClientRobot(port=6001, host="127.0.0.1")
+        env = RobotEnv(robot_client, control_rate_hz=100, camera_dict=camera_clients)
+        robot_client.command_joint_state([-1.57083303, 
+            -1.5707577,
+            1.57082206,
+            -1.5707825 ,
+            -1.57082922,
+            -1.57083494,
+            0.01176471])
+        time.sleep(1)
+    else:
+        print("GELLO DIRECTORY WRONG")
+        exit(1)
+
+    
 
     # fixed parameters
     state_dim = 7#14
@@ -88,11 +195,12 @@ def main(args):
         'seed': args['seed'],
         'temporal_agg': args['temporal_agg'],
         'camera_names': camera_names,
-        'real_robot': not is_sim
+        'real_robot': not is_sim,
+        'gello_env': env 
     }
 
     if is_eval:
-        ckpt_names = [f'policy_best.ckpt']
+        ckpt_names = task_config['ckpt_names'] #ckpt_names = [f'policy_best.ckpt'] 
         results = []
         for ckpt_name in ckpt_names:
             success_rate, avg_return = eval_bc(config, ckpt_name, save_episode=True)
@@ -112,12 +220,7 @@ def main(args):
     with open(stats_path, 'wb') as f:
         pickle.dump(stats, f)
 
-    if is_ft:
-        print('finetuning...')
-        ckpt_name = f'policy_best.ckpt'
-        best_ckpt_info = train_bc_ft(train_dataloader, val_dataloader, config, ckpt_name)
-    else:
-        best_ckpt_info = train_bc(train_dataloader, val_dataloader, config)
+    best_ckpt_info = train_bc(train_dataloader, val_dataloader, config)
     best_epoch, min_val_loss, best_state_dict = best_ckpt_info
 
     # save best checkpoint
@@ -146,18 +249,22 @@ def make_optimizer(policy_class, policy):
     return optimizer
 
 
-def get_image(ts, camera_names):
+def get_image(obs, camera_names):
     curr_images = []
-    for cam_name in camera_names:
-        curr_image = rearrange(ts.observation['images'][cam_name], 'h w c -> c h w')
+    # 0705, For this time we just use wrist_rgb so...
+    for camera_name in camera_names:
+        curr_image = rearrange(obs[f'{camera_name}_rgb'], 'h w c -> c h w')
         curr_images.append(curr_image)
+    # for cam_name in camera_names:
+    #     curr_image = rearrange(ts.observation['images'][cam_name], 'h w c -> c h w')
+    #     curr_images.append(curr_image)
     curr_image = np.stack(curr_images, axis=0)
     curr_image = torch.from_numpy(curr_image / 255.0).float().cuda().unsqueeze(0)
     return curr_image
 
 
 def eval_bc(config, ckpt_name, save_episode=True):
-    set_seed(1000)
+    set_seed(0)
     ckpt_dir = config['ckpt_dir']
     state_dim = config['state_dim']
     real_robot = config['real_robot']
@@ -169,6 +276,7 @@ def eval_bc(config, ckpt_name, save_episode=True):
     task_name = config['task_name']
     temporal_agg = config['temporal_agg']
     onscreen_cam = 'angle'
+    env = config['gello_env']
 
     # load policy and stats
     ckpt_path = os.path.join(ckpt_dir, ckpt_name)
@@ -181,17 +289,20 @@ def eval_bc(config, ckpt_name, save_episode=True):
     stats_path = os.path.join(ckpt_dir, f'dataset_stats.pkl')
     with open(stats_path, 'rb') as f:
         stats = pickle.load(f)
+    # import pdb; pdb.set_trace()
 
     pre_process = lambda s_qpos: (s_qpos - stats['qpos_mean']) / stats['qpos_std']
     post_process = lambda a: a * stats['action_std'] + stats['action_mean']
 
     # load environment
     if real_robot:
-        from aloha_scripts.robot_utils import move_grippers # requires aloha
-        from aloha_scripts.real_env import make_real_env # requires aloha
-        env = make_real_env(init_node=True)
+        # from aloha_scripts.robot_utils import move_grippers # requires aloha
+        # from aloha_scripts.real_env import make_real_env # requires aloha
+        # env = make_real_env(init_node=True)
+        # env_max_reward = 0
         env_max_reward = 0
     else:
+        raise NotImplementedError  # not for gello...
         from sim_env import make_sim_env
         env = make_sim_env(task_name)
         env_max_reward = env.task.max_reward
@@ -214,13 +325,13 @@ def eval_bc(config, ckpt_name, save_episode=True):
         elif 'sim_insertion' in task_name:
             BOX_POSE[0] = np.concatenate(sample_insertion_pose()) # used in sim reset
 
-        ts = env.reset()
+        # ts = env.reset()
 
         ### onscreen render
-        if onscreen_render:
-            ax = plt.subplot()
-            plt_img = ax.imshow(env._physics.render(height=480, width=640, camera_id=onscreen_cam))
-            plt.ion()
+        # if onscreen_render:
+        #     ax = plt.subplot()
+        #     plt_img = ax.imshow(env._physics.render(height=480, width=640, camera_id=onscreen_cam))
+        #     plt.ion()
 
         ### evaluation loop
         if temporal_agg:
@@ -228,28 +339,32 @@ def eval_bc(config, ckpt_name, save_episode=True):
 
         qpos_history = torch.zeros((1, max_timesteps, state_dim)).cuda()
         image_list = [] # for visualization
+        z_list = []
+        gripper_list = []
         qpos_list = []
         target_qpos_list = []
         rewards = []
         with torch.inference_mode():
             for t in range(max_timesteps):
                 ### update onscreen render and wait for DT
-                if onscreen_render:
-                    image = env._physics.render(height=480, width=640, camera_id=onscreen_cam)
-                    plt_img.set_data(image)
-                    plt.pause(DT)
+                # if onscreen_render:
+                    # image = env._physics.render(height=480, width=640, camera_id=onscreen_cam)
+                    # plt_img.set_data(image)
+                    # plt.pause(DT)
 
                 ### process previous timestep to get qpos and image_list
-                obs = ts.observation
-                if 'images' in obs:
-                    image_list.append(obs['images'])
-                else:
-                    image_list.append({'main': obs['image']})
-                qpos_numpy = np.array(obs['qpos'])
+                # obs = ts.observation
+                obs = env.get_obs()
+
+                qpos_numpy = np.array(obs["joint_positions"])
+                z_list.append(forward_kine(qpos_numpy[:-1]))
+                gripper_list.append(qpos_numpy[-1])
                 qpos = pre_process(qpos_numpy)
                 qpos = torch.from_numpy(qpos).float().cuda().unsqueeze(0)
                 qpos_history[:, t] = qpos
-                curr_image = get_image(ts, camera_names)
+                curr_image = get_image(obs, camera_names)
+                image_list.append(curr_image[0,0].permute(1,2,0).cpu().detach().numpy())
+                
 
                 ### query policy
                 if config['policy_class'] == "ACT":
@@ -277,17 +392,65 @@ def eval_bc(config, ckpt_name, save_episode=True):
                 action = post_process(raw_action)
                 target_qpos = action
 
+                if 0.35 >= target_qpos[-1] >= 0.05:
+                    target_qpos[-1] = 0.0
+                elif target_qpos[-1] > 0.35:
+                    target_qpos[0] = -2.06280464
+                    target_qpos[1] = -0.73391095
+                    target_qpos[2] = 1.10304809
+                    target_qpos[3] = -2.05495066
+                    target_qpos[4] = -1.60552838
+                    target_qpos[5] = -0.51487213
+                    target_qpos[6] = 0.0
+                    env.step(target_qpos)
+                    time.sleep(0.3)
+                    target_qpos[-1] = 0.8
+                    env.step(target_qpos)
+                    time.sleep(2)
+                    target_qpos = [-2.07362568, -0.83147486,  0.79779,    -1.65265227, -1.60343398, -0.52674037, 0.8]
+                    env.step(target_qpos)
+                    time.sleep(0.3)
+                    target_qpos = [-2.07362568, -0.83147486,  0.79779,    -1.65265227, -1.60343398, -0.52674037, 0.0]
+                    env.step(target_qpos)
+                    exit()
+                
+                # import pdb; pdb.set_trace()
+                # get_image(obs, camera_names)[0,0]
+                # plt.imshow(get_image(obs, camera_names)[0,0].permute(1,2,0).cpu().detach().numpy())
+                # plt.show()
+                # resnet_feature = policy.model.backbones[0](get_image(obs, camera_names)[0,0])[0][0]
+                # pos is sine position for discriminate cameras
+                
+
                 ### step the environment
-                ts = env.step(target_qpos)
+                env.step(target_qpos) # ts = env.step(target_qpos)
 
                 ### for visualization
                 qpos_list.append(qpos_numpy)
                 target_qpos_list.append(target_qpos)
-                rewards.append(ts.reward)
+                # rewards.append(ts.reward)
+                rewards.append(0)
+
+                fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(10, 8))
+                ax1.plot(gripper_list)
+                ax1.set_title('Gripper Position')
+                ax2.plot(z_list)
+                ax2.set_title('Z Position')
+                fig.suptitle('Gripper and Z Positions')
+                plt.savefig('./artifact/inference_positions.png')
+
+            # for img in image_list:
+            #     plt.imshow(img)
+            #     plt.pause(0.003)
+            import imageio
+            with imageio.get_writer('./artifact/inference_video.mp4', fps=30) as writer:
+                for img in image_list:
+                    writer.append_data(np.array(img))
 
             plt.close()
+        
         if real_robot:
-            move_grippers([env.puppet_bot_left, env.puppet_bot_right], [PUPPET_GRIPPER_JOINT_OPEN] * 2, move_time=0.5)  # open
+            # move_grippers([env.puppet_bot_left, env.puppet_bot_right], [PUPPET_GRIPPER_JOINT_OPEN] * 2, move_time=0.5)  # open
             pass
 
         rewards = np.array(rewards)
@@ -299,6 +462,8 @@ def eval_bc(config, ckpt_name, save_episode=True):
 
         if save_episode:
             save_videos(image_list, DT, video_path=os.path.join(ckpt_dir, f'video{rollout_id}.mp4'))
+    
+    
 
     success_rate = np.mean(np.array(highest_rewards) == env_max_reward)
     avg_return = np.mean(episode_returns)
@@ -325,6 +490,7 @@ def forward_pass(data, policy):
     image_data, qpos_data, action_data, is_pad = data
     image_data, qpos_data, action_data, is_pad = image_data.cuda(), qpos_data.cuda(), action_data.cuda(), is_pad.cuda()
     return policy(qpos_data, image_data, action_data, is_pad) # TODO remove None
+
 
 #jslee
 def train_bc_ft(train_dataloader, val_dataloader, config, ckpt_name):
@@ -521,4 +687,8 @@ if __name__ == '__main__':
     parser.add_argument('--dim_feedforward', action='store', type=int, help='dim_feedforward', required=False)
     parser.add_argument('--temporal_agg', action='store_true')
     
+    # for gello
+    parser.add_argument('--gello_dir', action='store', default='../gello_software', type=str)
+
+
     main(vars(parser.parse_args()))

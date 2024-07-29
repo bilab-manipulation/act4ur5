@@ -8,6 +8,8 @@ from copy import deepcopy
 from tqdm import tqdm
 from einops import rearrange
 
+import pdb
+
 from constants import DT
 from constants import PUPPET_GRIPPER_JOINT_OPEN
 from utils import load_data # data functions
@@ -15,12 +17,72 @@ from utils import sample_box_pose, sample_insertion_pose # robot functions
 from utils import compute_dict_mean, set_seed, detach_dict # helper functions
 from policy import ACTPolicy, CNNMLPPolicy
 from visualize_episodes import save_videos
-
+import matplotlib.pyplot as plt
+import time
 from sim_env import BOX_POSE
 import sys
 
 import IPython
 e = IPython.embed
+from sklearn.manifold import TSNE
+import umap
+
+
+# runcode
+# python experiments/launch_nodes.py --robot=ur
+
+# python3 imitate_episodes_gello.py --task_name pilot --ckpt_dir ckpt_pepero_1500 --policy_class ACT --kl_weight 10 --chunk_size 100 --hidden_dim 512 --batch_size 64 --dim_feedforward 3200 --num_epochs 2000  --lr 5e-5 --seed 0 --eval --temporal_agg
+
+def forward_kine(joint_angles):
+    def dh_transform(a, d, alpha, theta):
+        """
+        Calculate the DH transformation matrix.
+        a: link length
+        d: link offset
+        alpha: link twist
+        theta: joint angle
+        """
+        return np.array([
+            [np.cos(theta), -np.sin(theta)*np.cos(alpha), np.sin(theta)*np.sin(alpha), a*np.cos(theta)],
+            [np.sin(theta), np.cos(theta)*np.cos(alpha), -np.cos(theta)*np.sin(alpha), a*np.sin(theta)],
+            [0, np.sin(alpha), np.cos(alpha), d],
+            [0, 0, 0, 1]
+        ])
+
+    def calculate_gripper_height(joint_angles):
+        """
+        Calculate the height of the gripper base from the ground.
+        joint_angles: list of 6 joint angles in radians
+        """
+        # DH parameters: [a, d, alpha]
+        dh_params = [
+            [0.0000, 0.1625, np.pi/2],
+            [-0.4250, 0.0000, 0],
+            [-0.3922, 0.0000, 0],
+            [0.0000, 0.1333, np.pi/2],
+            [0.0000, 0.0997, -np.pi/2],
+            [0.0000, 0.0996, 0]
+        ]
+        
+        # Initialize the transformation matrix
+        T = np.eye(4)
+        
+        # Iterate through each joint and apply the DH transformation
+        for i in range(6):
+            a, d, alpha = dh_params[i]
+            theta = joint_angles[i]
+            T = np.dot(T, dh_transform(a, d, alpha, theta))
+        
+        # The z-coordinate of the gripper base is the height from the ground
+        gripper_height = T[2, 3]
+        return gripper_height
+
+    # Example usage
+    height = calculate_gripper_height(joint_angles)
+    return height
+
+
+
 
 def main(args):
 
@@ -53,9 +115,9 @@ def main(args):
 
     if os.path.isdir(args['gello_dir']):
         sys.path.append(args['gello_dir'])
-        from gello.env import RobotEnv
-        from gello.zmq_core.robot_node import ZMQClientRobot
-        from gello.cameras.realsense_camera import LogitechCamera, RealSenseCamera
+        from gello.env import RobotEnv # type: ignore
+        from gello.zmq_core.robot_node import ZMQClientRobot # type: ignore
+        from gello.cameras.realsense_camera import LogitechCamera, RealSenseCamera # type: ignore
         
         if len(camera_names) == 1:
             camera_clients = {
@@ -79,7 +141,14 @@ def main(args):
 
         robot_client = ZMQClientRobot(port=6001, host="127.0.0.1")
         env = RobotEnv(robot_client, control_rate_hz=100, camera_dict=camera_clients)
-
+        robot_client.command_joint_state([-1.57083303, 
+            -1.5707577,
+            1.57082206,
+            -1.5707825 ,
+            -1.57082922,
+            -1.57083494,
+            0.01176471])
+        time.sleep(1)
     else:
         print("GELLO DIRECTORY WRONG")
         exit(1)
@@ -194,7 +263,7 @@ def get_image(obs, camera_names):
 
 
 def eval_bc(config, ckpt_name, save_episode=True):
-    set_seed(1000)
+    set_seed(0)
     ckpt_dir = config['ckpt_dir']
     state_dim = config['state_dim']
     real_robot = config['real_robot']
@@ -219,6 +288,7 @@ def eval_bc(config, ckpt_name, save_episode=True):
     stats_path = os.path.join(ckpt_dir, f'dataset_stats.pkl')
     with open(stats_path, 'rb') as f:
         stats = pickle.load(f)
+    # import pdb; pdb.set_trace()
 
     pre_process = lambda s_qpos: (s_qpos - stats['qpos_mean']) / stats['qpos_std']
     post_process = lambda a: a * stats['action_std'] + stats['action_mean']
@@ -268,9 +338,13 @@ def eval_bc(config, ckpt_name, save_episode=True):
 
         qpos_history = torch.zeros((1, max_timesteps, state_dim)).cuda()
         image_list = [] # for visualization
+        z_list = []
+        gripper_list = []
+        feature_list = []
         qpos_list = []
         target_qpos_list = []
         rewards = []
+
         with torch.inference_mode():
             for t in range(max_timesteps):
                 ### update onscreen render and wait for DT
@@ -282,18 +356,16 @@ def eval_bc(config, ckpt_name, save_episode=True):
                 ### process previous timestep to get qpos and image_list
                 # obs = ts.observation
                 obs = env.get_obs()
-                if 'images' in obs:
-                    image_list.append(obs['images'])
-                else:
-                    # 일단 카메라 하나로 트레이닝
-                    image_list.append({'main': obs['wrist_rgb']}) # 480 640 3
-                    # image_list.append({'main': obs['image']})
-                # qpos_numpy = np.array(obs['qpos'])
+
                 qpos_numpy = np.array(obs["joint_positions"])
+                z_list.append(forward_kine(qpos_numpy[:-1]))
+                gripper_list.append(qpos_numpy[-1])
                 qpos = pre_process(qpos_numpy)
                 qpos = torch.from_numpy(qpos).float().cuda().unsqueeze(0)
                 qpos_history[:, t] = qpos
                 curr_image = get_image(obs, camera_names)
+                image_list.append(curr_image[0,0].permute(1,2,0).cpu().detach().numpy())
+                
 
                 ### query policy
                 if config['policy_class'] == "ACT":
@@ -320,6 +392,20 @@ def eval_bc(config, ckpt_name, save_episode=True):
                 raw_action = raw_action.squeeze(0).cpu().numpy()
                 action = post_process(raw_action)
                 target_qpos = action
+                
+                # import pdb; pdb.set_trace()
+                # get_image(obs, camera_names)[0,0]
+                # plt.imshow(get_image(obs, camera_names)[0,0].permute(1,2,0).cpu().detach().numpy())
+                # plt.show()
+                resnet_feature = policy.model.backbones[0](get_image(obs, camera_names)[0,0])[0][0]
+                resnet_feature = policy.model.input_proj(resnet_feature)
+                
+                #pdb.set_trace()
+                resnet_feature = resnet_feature.flatten()
+                feature_list.append(resnet_feature.cpu().detach().numpy())
+                # pos is sine position for discriminate cameras
+                
+
                 ### step the environment
                 env.step(target_qpos) # ts = env.step(target_qpos)
 
@@ -329,7 +415,58 @@ def eval_bc(config, ckpt_name, save_episode=True):
                 # rewards.append(ts.reward)
                 rewards.append(0)
 
-            # plt.close()
+                fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(10, 8))
+                ax1.plot(gripper_list)
+                ax1.set_title('Gripper Position')
+                ax2.plot(z_list)
+                ax2.set_title('Z Position')
+                fig.suptitle('Gripper and Z Positions')
+                plt.savefig('./artifact/inference_positions.png')
+
+            print("done")
+
+            # after rollout analysis
+            feature_list = np.array(feature_list)
+            timestamps = np.arange(len(feature_list))
+            tsne = TSNE(n_components=2, random_state=42)
+            tsne_results = tsne.fit_transform(feature_list)
+            # Initialize UMAP
+            umap_model = umap.UMAP(n_components=2, random_state=42, n_neighbors=15, min_dist=0.5)
+            umap_results = umap_model.fit_transform(feature_list)
+
+            fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(10, 8))
+
+            # t-SNE plot
+            scatter1 = ax1.scatter(tsne_results[:, 0], tsne_results[:, 1], c=timestamps, cmap='viridis')
+            cbar1 = plt.colorbar(scatter1, ax=ax1, label='Time Sequence')
+            ax1.set_title('t-SNE of ResNet Features')
+            ax1.set_xlabel('t-SNE Component 1')
+            ax1.set_ylabel('t-SNE Component 2')
+
+            # UMAP plot
+            scatter2 = ax2.scatter(umap_results[:, 0], umap_results[:, 1], c=timestamps, cmap='viridis')
+            cbar2 = plt.colorbar(scatter2, ax=ax2, label='Time Sequence')
+            ax2.set_title('UMAP of ResNet Features')
+            ax2.set_xlabel('UMAP Component 1')
+            ax2.set_ylabel('UMAP Component 2')
+
+            # Save the figure
+            plt.tight_layout()  # Adjust layout to prevent overlap
+            plt.savefig('./artifact/resnet_feature_analysis.png')
+            with open('./artifact/umap_model.pkl', 'wb') as f:
+                pickle.dump(umap_model, f)
+            with open('./artifact/feature_list.pkl', 'wb') as f:
+                pickle.dump(feature_list, f)
+            torch.save(policy.model.input_proj, './artifact/proj.pth')
+            torch.save(policy.model.backbones[0], './artifact/backbone.pth')
+
+            ### save video      
+            import imageio
+            with imageio.get_writer('./artifact/inference_video.mp4', fps=30) as writer:
+                for img in image_list:
+                    writer.append_data(np.array(img))
+
+            plt.close()
         
         if real_robot:
             # move_grippers([env.puppet_bot_left, env.puppet_bot_right], [PUPPET_GRIPPER_JOINT_OPEN] * 2, move_time=0.5)  # open
@@ -373,6 +510,88 @@ def forward_pass(data, policy):
     image_data, qpos_data, action_data, is_pad = image_data.cuda(), qpos_data.cuda(), action_data.cuda(), is_pad.cuda()
     return policy(qpos_data, image_data, action_data, is_pad) # TODO remove None
 
+
+#jslee
+def train_bc_ft(train_dataloader, val_dataloader, config, ckpt_name):
+    num_epochs = config['num_epochs']
+    ckpt_dir = config['ckpt_dir']
+    seed = config['seed']
+    policy_class = config['policy_class']
+    policy_config = config['policy_config']
+
+    set_seed(seed)
+
+    policy = make_policy(policy_class, policy_config)
+    #jslee
+    ckpt_path = os.path.join(ckpt_dir, ckpt_name)
+    loading_status = policy.load_state_dict(torch.load(ckpt_path))
+    print(loading_status)
+
+    policy.cuda()
+    optimizer = make_optimizer(policy_class, policy)
+
+    train_history = []
+    validation_history = []
+    min_val_loss = np.inf
+    best_ckpt_info = None
+    for epoch in tqdm(range(num_epochs)):
+        print(f'\nEpoch {epoch}')
+        # validation
+        with torch.inference_mode():
+            policy.eval()
+            epoch_dicts = []
+            for batch_idx, data in enumerate(val_dataloader):
+                forward_dict = forward_pass(data, policy)
+                epoch_dicts.append(forward_dict)
+            epoch_summary = compute_dict_mean(epoch_dicts)
+            validation_history.append(epoch_summary)
+
+            epoch_val_loss = epoch_summary['loss']
+            if epoch_val_loss < min_val_loss:
+                min_val_loss = epoch_val_loss
+                best_ckpt_info = (epoch, min_val_loss, deepcopy(policy.state_dict()))
+        print(f'Val loss:   {epoch_val_loss:.5f}')
+        summary_string = ''
+        for k, v in epoch_summary.items():
+            summary_string += f'{k}: {v.item():.3f} '
+        print(summary_string)
+
+        # training
+        policy.train()
+        optimizer.zero_grad()
+        for batch_idx, data in enumerate(train_dataloader):
+            forward_dict = forward_pass(data, policy)
+            # backward
+            loss = forward_dict['loss']
+            loss.backward()
+            optimizer.step()
+            optimizer.zero_grad()
+            train_history.append(detach_dict(forward_dict))
+        epoch_summary = compute_dict_mean(train_history[(batch_idx+1)*epoch:(batch_idx+1)*(epoch+1)])
+        epoch_train_loss = epoch_summary['loss']
+        print(f'Train loss: {epoch_train_loss:.5f}')
+        summary_string = ''
+        for k, v in epoch_summary.items():
+            summary_string += f'{k}: {v.item():.3f} '
+        print(summary_string)
+
+        if epoch % 100 == 0:
+            ckpt_path = os.path.join(ckpt_dir, f'policy_epoch_{epoch}_seed_{seed}.ckpt')
+            torch.save(policy.state_dict(), ckpt_path)
+            plot_history(train_history, validation_history, epoch, ckpt_dir, seed)
+
+    ckpt_path = os.path.join(ckpt_dir, f'policy_last.ckpt')
+    torch.save(policy.state_dict(), ckpt_path)
+
+    best_epoch, min_val_loss, best_state_dict = best_ckpt_info
+    ckpt_path = os.path.join(ckpt_dir, f'policy_epoch_{best_epoch}_seed_{seed}.ckpt')
+    torch.save(best_state_dict, ckpt_path)
+    print(f'Training finished:\nSeed {seed}, val loss {min_val_loss:.6f} at epoch {best_epoch}')
+
+    # save training curves
+    plot_history(train_history, validation_history, num_epochs, ckpt_dir, seed)
+
+    return best_ckpt_info
 
 def train_bc(train_dataloader, val_dataloader, config):
     num_epochs = config['num_epochs']
