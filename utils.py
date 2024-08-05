@@ -53,6 +53,8 @@ class EpisodicDataset(torch.utils.data.Dataset):
         self.is_sim = is_sim
         padded_action = np.zeros((150, original_action_shape[1]), dtype=np.float32)#np.zeros(original_action_shape, dtype=np.float32)
         padded_action[:len(action)] = action#[:action_len] = action
+
+        
         is_pad = np.zeros(150)#np.zeros(episode_len)
         is_pad[len(action):] = 1#[action_len:] = 1
 
@@ -82,12 +84,19 @@ class EpisodicDataset(torch.utils.data.Dataset):
 def get_norm_stats(dataset_dir, num_episodes):
     all_qpos_data = []
     all_action_data = []
+    min_length = int(1e+9)
     for episode_idx in range(num_episodes):
+        #150으로 자르지 말고, 가장 최소의 에피소드 길이를 갖는 것의 길이를 찾는 다음 그것 까지만의 값을 사용하자 (mean, std구할떄만)
         dataset_path = os.path.join(dataset_dir, f'traj_{episode_idx}.h5')#f'episode_{episode_idx}.hdf5')
         with h5py.File(dataset_path, 'r') as root:
-            qpos = root[f'/dict_str_traj_{episode_idx}/dict_str_obs/dict_str_state'][:150]#root['/observations/qpos'][()]
-            qvel = root[f'/dict_str_traj_{episode_idx}/dict_str_obs/dict_str_state'][:150]#root['/observations/qvel'][()]
-            action = action = root[f'/dict_str_traj_{episode_idx}/dict_str_obs/dict_str_state'][:150]#root['/action'][()]
+            min_length = min(min_length, len(root[f'/dict_str_traj_{episode_idx}/dict_str_obs/dict_str_state']))#root['/observations/qpos'][()]
+    for episode_idx in range(num_episodes):
+        dataset_path = os.path.join(dataset_dir, f'traj_{episode_idx}.h5')#f'episode_{episode_idx}.hdf5')
+
+        with h5py.File(dataset_path, 'r') as root:
+            qpos = root[f'/dict_str_traj_{episode_idx}/dict_str_obs/dict_str_state'][:min_length]#root['/observations/qpos'][()]
+            qvel = root[f'/dict_str_traj_{episode_idx}/dict_str_obs/dict_str_state'][:min_length]#root['/observations/qvel'][()]
+            action = action = root[f'/dict_str_traj_{episode_idx}/dict_str_obs/dict_str_state'][:min_length]#root['/action'][()]
         all_qpos_data.append(torch.from_numpy(qpos))
         all_action_data.append(torch.from_numpy(action))
     all_qpos_data = torch.stack(all_qpos_data)
