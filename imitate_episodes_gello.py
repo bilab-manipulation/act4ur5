@@ -8,7 +8,6 @@ from copy import deepcopy
 from tqdm import tqdm
 from einops import rearrange
 
-import pdb
 
 from constants import DT
 from constants import PUPPET_GRIPPER_JOINT_OPEN
@@ -24,64 +23,6 @@ import sys
 
 import IPython
 e = IPython.embed
-from sklearn.manifold import TSNE
-import umap
-
-
-# runcode
-# python experiments/launch_nodes.py --robot=ur
-
-# python3 imitate_episodes_gello.py --task_name pilot --ckpt_dir ckpt_pepero_1500 --policy_class ACT --kl_weight 10 --chunk_size 100 --hidden_dim 512 --batch_size 64 --dim_feedforward 3200 --num_epochs 2000  --lr 5e-5 --seed 0 --eval --temporal_agg
-
-def forward_kine(joint_angles):
-    def dh_transform(a, d, alpha, theta):
-        """
-        Calculate the DH transformation matrix.
-        a: link length
-        d: link offset
-        alpha: link twist
-        theta: joint angle
-        """
-        return np.array([
-            [np.cos(theta), -np.sin(theta)*np.cos(alpha), np.sin(theta)*np.sin(alpha), a*np.cos(theta)],
-            [np.sin(theta), np.cos(theta)*np.cos(alpha), -np.cos(theta)*np.sin(alpha), a*np.sin(theta)],
-            [0, np.sin(alpha), np.cos(alpha), d],
-            [0, 0, 0, 1]
-        ])
-
-    def calculate_gripper_height(joint_angles):
-        """
-        Calculate the height of the gripper base from the ground.
-        joint_angles: list of 6 joint angles in radians
-        """
-        # DH parameters: [a, d, alpha]
-        dh_params = [
-            [0.0000, 0.1625, np.pi/2],
-            [-0.4250, 0.0000, 0],
-            [-0.3922, 0.0000, 0],
-            [0.0000, 0.1333, np.pi/2],
-            [0.0000, 0.0997, -np.pi/2],
-            [0.0000, 0.0996, 0]
-        ]
-        
-        # Initialize the transformation matrix
-        T = np.eye(4)
-        
-        # Iterate through each joint and apply the DH transformation
-        for i in range(6):
-            a, d, alpha = dh_params[i]
-            theta = joint_angles[i]
-            T = np.dot(T, dh_transform(a, d, alpha, theta))
-        
-        # The z-coordinate of the gripper base is the height from the ground
-        gripper_height = T[2, 3]
-        return gripper_height
-
-    # Example usage
-    height = calculate_gripper_height(joint_angles)
-    return height
-
-
 
 
 def main(args):
@@ -141,13 +82,13 @@ def main(args):
 
         robot_client = ZMQClientRobot(port=6001, host="127.0.0.1")
         env = RobotEnv(robot_client, control_rate_hz=100, camera_dict=camera_clients)
-        robot_client.command_joint_state([-1.57083303, 
-            -1.5707577,
-            1.57082206,
-            -1.5707825 ,
-            -1.57082922,
-            -1.57083494,
-            0.01176471])
+        robot_client.command_joint_state([-1.57, 
+            -1.57,
+            1.57,
+            -1.57 ,
+            -1.57,
+            -1.57,
+            0.])
         time.sleep(1)
     else:
         print("GELLO DIRECTORY WRONG")
@@ -338,33 +279,26 @@ def eval_bc(config, ckpt_name, save_episode=True):
 
         qpos_history = torch.zeros((1, max_timesteps, state_dim)).cuda()
         image_list = [] # for visualization
-        z_list = []
-        gripper_list = []
-        feature_list = []
         qpos_list = []
         target_qpos_list = []
         rewards = []
 
         with torch.inference_mode():
             for t in range(max_timesteps):
-                ### update onscreen render and wait for DT
-                # if onscreen_render:
-                    # image = env._physics.render(height=480, width=640, camera_id=onscreen_cam)
-                    # plt_img.set_data(image)
-                    # plt.pause(DT)
-
-                ### process previous timestep to get qpos and image_list
-                # obs = ts.observation
+                
                 obs = env.get_obs()
+                if 'images' in obs:
+                    image_list.append(obs['images'])
+                else:
+                    # 일단 카메라 하나로 트레이닝
+                    image_list.append({'main': obs['wrist_rgb']}) # 480 640 3
+                    # image_list.append({'main': obs['image']})
 
                 qpos_numpy = np.array(obs["joint_positions"])
-                z_list.append(forward_kine(qpos_numpy[:-1]))
-                gripper_list.append(qpos_numpy[-1])
                 qpos = pre_process(qpos_numpy)
                 qpos = torch.from_numpy(qpos).float().cuda().unsqueeze(0)
                 qpos_history[:, t] = qpos
                 curr_image = get_image(obs, camera_names)
-                image_list.append(curr_image[0,0].permute(1,2,0).cpu().detach().numpy())
                 
 
                 ### query policy
@@ -392,20 +326,7 @@ def eval_bc(config, ckpt_name, save_episode=True):
                 raw_action = raw_action.squeeze(0).cpu().numpy()
                 action = post_process(raw_action)
                 target_qpos = action
-                
-                # import pdb; pdb.set_trace()
-                # get_image(obs, camera_names)[0,0]
-                # plt.imshow(get_image(obs, camera_names)[0,0].permute(1,2,0).cpu().detach().numpy())
-                # plt.show()
-                resnet_feature = policy.model.backbones[0](get_image(obs, camera_names)[0,0])[0][0]
-                resnet_feature = policy.model.input_proj(resnet_feature)
-                
-                #pdb.set_trace()
-                resnet_feature = resnet_feature.flatten()
-                feature_list.append(resnet_feature.cpu().detach().numpy())
-                # pos is sine position for discriminate cameras
-                
-
+               
                 ### step the environment
                 env.step(target_qpos) # ts = env.step(target_qpos)
 
@@ -415,58 +336,7 @@ def eval_bc(config, ckpt_name, save_episode=True):
                 # rewards.append(ts.reward)
                 rewards.append(0)
 
-                fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(10, 8))
-                ax1.plot(gripper_list)
-                ax1.set_title('Gripper Position')
-                ax2.plot(z_list)
-                ax2.set_title('Z Position')
-                fig.suptitle('Gripper and Z Positions')
-                plt.savefig('./artifact/inference_positions.png')
-
-            print("done")
-
-            # after rollout analysis
-            feature_list = np.array(feature_list)
-            timestamps = np.arange(len(feature_list))
-            tsne = TSNE(n_components=2, random_state=42)
-            tsne_results = tsne.fit_transform(feature_list)
-            # Initialize UMAP
-            umap_model = umap.UMAP(n_components=2, random_state=42, n_neighbors=15, min_dist=0.5)
-            umap_results = umap_model.fit_transform(feature_list)
-
-            fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(10, 8))
-
-            # t-SNE plot
-            scatter1 = ax1.scatter(tsne_results[:, 0], tsne_results[:, 1], c=timestamps, cmap='viridis')
-            cbar1 = plt.colorbar(scatter1, ax=ax1, label='Time Sequence')
-            ax1.set_title('t-SNE of ResNet Features')
-            ax1.set_xlabel('t-SNE Component 1')
-            ax1.set_ylabel('t-SNE Component 2')
-
-            # UMAP plot
-            scatter2 = ax2.scatter(umap_results[:, 0], umap_results[:, 1], c=timestamps, cmap='viridis')
-            cbar2 = plt.colorbar(scatter2, ax=ax2, label='Time Sequence')
-            ax2.set_title('UMAP of ResNet Features')
-            ax2.set_xlabel('UMAP Component 1')
-            ax2.set_ylabel('UMAP Component 2')
-
-            # Save the figure
-            plt.tight_layout()  # Adjust layout to prevent overlap
-            plt.savefig('./artifact/resnet_feature_analysis.png')
-            with open('./artifact/umap_model.pkl', 'wb') as f:
-                pickle.dump(umap_model, f)
-            with open('./artifact/feature_list.pkl', 'wb') as f:
-                pickle.dump(feature_list, f)
-            torch.save(policy.model.input_proj, './artifact/proj.pth')
-            torch.save(policy.model.backbones[0], './artifact/backbone.pth')
-
-            ### save video      
-            import imageio
-            with imageio.get_writer('./artifact/inference_video.mp4', fps=30) as writer:
-                for img in image_list:
-                    writer.append_data(np.array(img))
-
-            plt.close()
+           
         
         if real_robot:
             # move_grippers([env.puppet_bot_left, env.puppet_bot_right], [PUPPET_GRIPPER_JOINT_OPEN] * 2, move_time=0.5)  # open
