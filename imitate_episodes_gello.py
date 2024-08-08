@@ -65,17 +65,17 @@ def main(args):
                 # you can optionally add camera nodes here for imitation learning purposes
                 # "wrist": ZMQClientCamera(port=args.wrist_camera_port, host=args.hostname),
                 # "base": ZMQClientCamera(port=args.base_camera_port, host=args.hostname),
-                # "wrist": LogitechCamera(device_id='/dev/video0')
-                "wrist": LogitechCamera(device_id='/dev/video0')
+                # "wrist": LogitechCamera(device_id='/dev/frontcam')
+                "wrist": LogitechCamera(device_id='/dev/frontcam')
             }
         elif len(camera_names) == 2:
             camera_clients = {
                 # you can optionally add camera nodes here for imitation learning purposes
                 # "wrist": ZMQClientCamera(port=args.wrist_camera_port, host=args.hostname),
                 # "base": ZMQClientCamera(port=args.base_camera_port, host=args.hostname),
-                # "wrist": LogitechCamera(device_id='/dev/video0')
+                # "wrist": LogitechCamera(device_id='/dev/frontcam')
                 "wrist": RealSenseCamera(),
-                "base": LogitechCamera(device_id='/dev/video0')
+                "base": LogitechCamera(device_id='/dev/frontcam')
             }
         else:
             raise NotImplementedError
