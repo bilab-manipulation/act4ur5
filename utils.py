@@ -73,7 +73,7 @@ class EpisodicDataset(torch.utils.data.Dataset):
         action_data = (action_data - self.norm_stats["action_mean"]) / self.norm_stats["action_std"]
         qpos_data = (qpos_data - self.norm_stats["qpos_mean"]) / self.norm_stats["qpos_std"]
 
-        return image_data, qpos_data, action_data, is_pad
+        return image_data.float(), qpos_data.float(), action_data.float(), is_pad
 
 
 def get_norm_stats(dataset_dir, num_episodes):
