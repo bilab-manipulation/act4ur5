@@ -32,6 +32,7 @@ def main(args):
     batch_size_train = args['batch_size']
     batch_size_val = args['batch_size']
     num_epochs = args['num_epochs']
+    base_crop = args['base_crop']
 
     # get task parameters
     is_sim = task_name[:4] == 'sim_'
@@ -212,7 +213,7 @@ def main(args):
         task_config['ckpt_names'] # ckpt_names = [f'policy_best.ckpt']
         results = []
         for ckpt_name in ckpt_names:
-            success_rate, avg_return = eval_bc(config, ckpt_name, save_episode=True)
+            success_rate, avg_return = eval_bc(config, ckpt_name, base_crop, save_episode=True)
             results.append([ckpt_name, success_rate, avg_return])
 
         for ckpt_name, success_rate, avg_return in results:
@@ -220,7 +221,7 @@ def main(args):
         print()
         exit()
 
-    train_dataloader, val_dataloader, stats, _ = load_data(dataset_dir, num_episodes, camera_names, batch_size_train, batch_size_val)
+    train_dataloader, val_dataloader, stats, _ = load_data(dataset_dir, num_episodes, camera_names, batch_size_train, batch_size_val, base_crop)
 
     # save dataset stats
     if not os.path.isdir(ckpt_dir):
@@ -258,11 +259,18 @@ def make_optimizer(policy_class, policy):
     return optimizer
 
 
-def get_image(ts, camera_names):
+def get_image(camera_names, base_crop):
     curr_images = []
     # 0705, For this time we just use wrist_rgb so...
     for camera_name in camera_names:
         curr_image = rearrange(obs[f'{camera_name}_rgb'], 'h w c -> c h w')
+        if base_crop and camera_name == 'base':
+            assert curr_image.shape == (480, 640, 3)
+            curr_image = curr_image[96:, :-40]
+            curr_image = cv2.resize(curr_image, (640, 480), interpolation=cv2.INTER_LANCZOS4)
+
+        assert curr_image.shape == (480, 640, 3) 
+
         curr_images.append(curr_image)
     # for cam_name in camera_names:
     #     curr_image = rearrange(ts.observation['images'][cam_name], 'h w c -> c h w')
@@ -272,7 +280,7 @@ def get_image(ts, camera_names):
     return curr_image
 
 
-def eval_bc(config, ckpt_name, save_episode=True):
+def eval_bc(config, ckpt_name, base_crop, save_episode=True):
     set_seed(1000)
     ckpt_dir = config['ckpt_dir']
     state_dim = config['state_dim']
@@ -373,7 +381,7 @@ def eval_bc(config, ckpt_name, save_episode=True):
                 qpos = pre_process(qpos_numpy)
                 qpos = torch.from_numpy(qpos).float().cuda().unsqueeze(0)
                 qpos_history[:, t] = qpos
-                curr_image = get_image(ts, camera_names)
+                curr_image = get_image(camera_names, base_crop)
 
                 ### query policy
                 if config['policy_class'] == "ACT":
