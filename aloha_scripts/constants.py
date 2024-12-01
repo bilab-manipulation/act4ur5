@@ -9,6 +9,7 @@ TASK_CONFIGS = {
         'episode_len': 500,
         'camera_names': ['wrist_left', 'wrist_right', 'base'],
         'ckpt_names': ['policy_best.ckpt'],
+        'base_crop': True,
     },
  
 }

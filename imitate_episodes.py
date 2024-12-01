@@ -47,7 +47,8 @@ def main(args):
     num_episodes = task_config['num_episodes']
     episode_len = task_config['episode_len']
     camera_names = task_config['camera_names']
-    is_ft = task_config['is_ft']
+    #arti setting
+    base_crop = task_config['base_crop']
 
     # fixed parameters
     state_dim = 7#14
@@ -103,7 +104,7 @@ def main(args):
         print()
         exit()
 
-    train_dataloader, val_dataloader, stats, _ = load_data(dataset_dir, num_episodes, camera_names, batch_size_train, batch_size_val)
+    train_dataloader, val_dataloader, stats, _ = load_data(dataset_dir, num_episodes, camera_names, batch_size_train, batch_size_val, base_crop)
 
     # save dataset stats
     if not os.path.isdir(ckpt_dir):
