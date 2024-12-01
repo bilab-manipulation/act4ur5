@@ -146,9 +146,6 @@ dmypy.json
 # Pyre type checker
 .pyre/
 
-ckpt/
-*.zip
-artifact/
 
-
-sim_transfer_cube_scripted/
+ckpt*/*
+pilot/*

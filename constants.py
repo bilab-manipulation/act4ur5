@@ -1,44 +1,14 @@
 import pathlib
 
 ### Task parameters
-DATA_DIR = '.'#'<put your data dir here>'
+DATA_DIR = '.'
 SIM_TASK_CONFIGS = {
     'pilot':{
         'dataset_dir': DATA_DIR + '/pilot',
-        'num_episodes': 50,
-        'episode_len': 150,
-        #'camera_names': ['wrist', 'base'], # 순서 중요, 카메라 두개일 때
-        'camera_names': ['wrist'], # 카메라 한개일 때
-        #'ckpt_names': [f'policy_epoch_1500_seed_0.ckpt'],
-        'ckpt_names': [f'policy_best.ckpt'],
-        'is_ft' : False
+        'num_episodes': 100,
+        'episode_len': 500,
+        'camera_names': ['wrist_left', 'wrist_right', 'base']
     },
-
-
-    'pepero':{
-        'dataset_dir': DATA_DIR + '/pilot_ft',
-        'num_episodes': 50,
-        'episode_len': 150,
-        #'camera_names': ['wrist', 'base'], # 순서 중요, 카메라 두개일 때
-        'camera_names': ['wrist'], # 카메라 한개일 때
-        #'ckpt_names': [f'policy_epoch_1500_seed_0.ckpt'],
-        'ckpt_names': [f'policy_best.ckpt'],
-        'is_ft' : False
-    },
-
-     'pepero_init':{
-            'dataset_dir': DATA_DIR + '/pilot_ft',
-            'num_episodes': 50,
-            'episode_len': 150,
-            #'camera_names': ['wrist', 'base'], # 순서 중요, 카메라 두개일 때
-            'camera_names': ['wrist'], # 카메라 한개일 때
-            'ckpt_names': [f'policy_epoch_0_seed_0.ckpt'],
-            # 'ckpt_names': [f'policy_best.ckpt'],
-            'is_ft' : False
-        },
-
-
-
     'sim_transfer_cube_scripted':{
         'dataset_dir': DATA_DIR + '/sim_transfer_cube_scripted',
         'num_episodes': 50,
