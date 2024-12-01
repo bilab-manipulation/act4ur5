@@ -51,7 +51,8 @@ def main(args):
     base_crop = task_config['base_crop']
 
     # fixed parameters
-    state_dim = 7#14
+    state_dim = task_config['state_dim']
+    print("STATE DIM", state_dim)
     lr_backbone = 1e-5
     backbone = 'resnet18'
     if policy_class == 'ACT':
@@ -69,6 +70,7 @@ def main(args):
                          'dec_layers': dec_layers,
                          'nheads': nheads,
                          'camera_names': camera_names,
+                         'state_dim': state_dim
                          }
     elif policy_class == 'CNNMLP':
         policy_config = {'lr': args['lr'], 'lr_backbone': lr_backbone, 'backbone' : backbone, 'num_queries': 1,

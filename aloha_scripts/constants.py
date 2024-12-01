@@ -6,10 +6,12 @@ TASK_CONFIGS = {
     'pilot':{
         'dataset_dir': DATA_DIR + '/pilot',
         'num_episodes': 100,
-        'episode_len': 500,
-        'camera_names': ['wrist_left', 'wrist_right', 'base'],
+        'episode_len': 300,
+        'camera_names': ['wrist', 'base'],
+        # 'camera_names': ['wrist_left', 'wrist_right', 'base'],
         'ckpt_names': ['policy_best.ckpt'],
-        'base_crop': True,
+        'base_crop': False, # whether to crop the base image or not (mbn demo)
+        'state_dim': 7
     },
  
 }
