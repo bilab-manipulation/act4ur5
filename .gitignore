@@ -142,3 +142,5 @@ dmypy.json
 
 ckpt*/*
 pilot*/*
+
+*.zip
