@@ -46,8 +46,7 @@ def main(args):
     num_episodes = task_config['num_episodes']
     episode_len = task_config['episode_len']
     camera_names = task_config['camera_names']
-    # 바이메뉴얼 가정!!! 1123
-    state_dim = 14
+    state_dim = task_config['state_dim']
     
     if os.path.isdir(args['gello_dir']):
         sys.path.append(args['gello_dir'])
@@ -184,6 +183,7 @@ def main(args):
                          'dec_layers': dec_layers,
                          'nheads': nheads,
                          'camera_names': camera_names,
+                         'state_dim': state_dim
                          
                          }
     elif policy_class == 'CNNMLP':
