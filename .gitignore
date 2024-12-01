@@ -148,8 +148,8 @@ dmypy.json
 
 
 ckpt*/*
-<<<<<<< HEAD
-pilot/*
-=======
+
 pilot*/*
->>>>>>> 8a1af11 (add base_crop mode)
+
+*.zip
+
