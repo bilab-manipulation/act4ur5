@@ -1,3 +1,10 @@
+# data folder
+/dat
+/dat_2
+/pilot
+/pilot*
+ckpt_*/
+
 bin
 logs
 wandb
