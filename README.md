@@ -8,6 +8,18 @@
 
 train & eval 코드는 하단 참고
      
+## Fast Guide
+- inference command
+
+```
+python3 imitate_episodes.py --task_name pilot \
+    --ckpt_dir <ckpt_dir> \
+    --policy_class ACT --kl_weight 10 --chunk_size 100 --hidden_dim 512 --batch_size 8 --dim_feedforward 3200 \
+    --num_epochs 2000  --lr 1e-5 --eval\
+    --seed 0
+```
+`num_queries` 조절하고 `constants.py` 의 `base_crop`인자 생각하기
+
 
 ### *New*: [ACT tuning tips](https://docs.google.com/document/d/1FVIZfoALXg_ZkYKaYVh-qOlaXveq5CtvJHXkY25eYhs/edit?usp=sharing)
 TL;DR: if your ACT policy is jerky or pauses in the middle of an episode, just train for longer! Success rate and smoothness can improve way after loss plateaus.
