@@ -43,7 +43,6 @@ class DETRVAE(nn.Module):
                          DETR can detect in a single image. For COCO, we recommend 100 queries.
             aux_loss: True if auxiliary decoding losses (loss at each decoder layer) are to be used.
         """
-        assert state_dim == 7, "Only support 7 dim robot state for now 1206 alchi setting for temporary!"
         super().__init__()
         self.num_queries = num_queries
         self.camera_names = camera_names

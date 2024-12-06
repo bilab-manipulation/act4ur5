@@ -23,15 +23,7 @@ class EpisodicDataset(torch.utils.data.Dataset):
         return len(self.episode_ids)
 
     def __getitem__(self, index):
-        sample_full_episode = False  # 하드코딩
-        episode_idx = self.episode_ids[index]
-        dataset_path = os.path.join(self.dataset_dir, f'traj_{episode_idx}.h5')
-        
-        root = self.file_cache[dataset_path]
-        # 데이터 로딩 및 처리
-        is_sim = False  # root.attrs['sim']
-        original_action_shape = root['state'].shape
-        episode_len = original_action_shape[0]
+        sample_full_episode = False # hardcode
 
         episode_id = self.episode_ids[index]
         dataset_path = os.path.join(self.dataset_dir, f'episode_{episode_id}.hdf5')
@@ -67,24 +59,28 @@ class EpisodicDataset(torch.utils.data.Dataset):
                 action_len = episode_len - max(0, start_ts - 1) # hack, to make timesteps more aligned
 
         self.is_sim = is_sim
-        padded_action = np.zeros((150, original_action_shape[1]), dtype=np.float32)
-        padded_action[:len(action)] = action
+        padded_action = np.zeros(original_action_shape, dtype=np.float32)
+        padded_action[:action_len] = action
+        is_pad = np.zeros(episode_len)
+        is_pad[action_len:] = 1
 
-        is_pad = np.zeros(150)
-        is_pad[len(action):] = 1
-
-        # 여러 카메라의 이미지를 스택
-        all_cam_images = [image_dict[cam_name] for cam_name in self.camera_names]
+        # new axis for different cameras
+        all_cam_images = []
+        for cam_name in self.camera_names:
+            all_cam_images.append(image_dict[cam_name])
         all_cam_images = np.stack(all_cam_images, axis=0)
-        # 텐서로 변환 및 전처리
-        image_data = torch.from_numpy(all_cam_images).float() / 255.0
+
+        # construct observations
+        image_data = torch.from_numpy(all_cam_images)
         qpos_data = torch.from_numpy(qpos).float()
         action_data = torch.from_numpy(padded_action).float()
         is_pad = torch.from_numpy(is_pad).bool()
 
-        # 채널 순서 변경 (채널 마지막에서 첫 번째로)
-        image_data = image_data.permute(0, 3, 1, 2)
-        # 정규화
+        # channel last
+        image_data = torch.einsum('k h w c -> k c h w', image_data)
+
+        # normalize image and change dtype to float
+        image_data = image_data / 255.0
         action_data = (action_data - self.norm_stats["action_mean"]) / self.norm_stats["action_std"]
         qpos_data = (qpos_data - self.norm_stats["qpos_mean"]) / self.norm_stats["qpos_std"]
 
@@ -94,19 +90,12 @@ class EpisodicDataset(torch.utils.data.Dataset):
 def get_norm_stats(dataset_dir, num_episodes):
     all_qpos_data = []
     all_action_data = []
-    min_length = int(1e+9)
     for episode_idx in range(num_episodes):
-        #150으로 자르지 말고, 가장 최소의 에피소드 길이를 갖는 것의 길이를 찾는 다음 그것 까지만의 값을 사용하자 (mean, std구할떄만)
-        dataset_path = os.path.join(dataset_dir, f'traj_{episode_idx}.h5')#f'episode_{episode_idx}.hdf5')
+        dataset_path = os.path.join(dataset_dir, f'episode_{episode_idx}.hdf5')
         with h5py.File(dataset_path, 'r') as root:
-            min_length = min(min_length, len(root[f'/dict_str_traj_{episode_idx}/dict_str_obs/dict_str_state']))#root['/observations/qpos'][()]
-    for episode_idx in range(num_episodes):
-        dataset_path = os.path.join(dataset_dir, f'traj_{episode_idx}.h5')#f'episode_{episode_idx}.hdf5')
-
-        with h5py.File(dataset_path, 'r') as root:
-            qpos = root[f'/dict_str_traj_{episode_idx}/dict_str_obs/dict_str_state'][:min_length]#root['/observations/qpos'][()]
-            qvel = root[f'/dict_str_traj_{episode_idx}/dict_str_obs/dict_str_state'][:min_length]#root['/observations/qvel'][()]
-            action = action = root[f'/dict_str_traj_{episode_idx}/dict_str_obs/dict_str_state'][:min_length]#root['/action'][()]
+            qpos = root['/observations/qpos'][()]
+            qvel = root['/observations/qvel'][()]
+            action = root['/action'][()]
         all_qpos_data.append(torch.from_numpy(qpos))
         all_action_data.append(torch.from_numpy(action))
     all_qpos_data = torch.stack(all_qpos_data)
@@ -140,6 +129,7 @@ def load_data(dataset_dir, num_episodes, camera_names, batch_size_train, batch_s
 
     # obtain normalization stats for qpos and action
     norm_stats = get_norm_stats(dataset_dir, num_episodes)
+
     # construct dataset and dataloader
     train_dataset = EpisodicDataset(train_indices, dataset_dir, camera_names, norm_stats, base_crop)
     val_dataset = EpisodicDataset(val_indices, dataset_dir, camera_names, norm_stats, base_crop)

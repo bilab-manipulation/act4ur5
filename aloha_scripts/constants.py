@@ -9,9 +9,10 @@ TASK_CONFIGS = {
         'episode_len': 300,
         'camera_names': ['wrist', 'base'],
         # 'camera_names': ['wrist_left', 'wrist_right', 'base'],
-        'ckpt_names': ['policy_best.ckpt'],
+        'ckpt_names': ['policy_last.ckpt'],
         'base_crop': False, # whether to crop the base image or not (mbn demo)
-        'state_dim': 7
+        'state_dim': 7,
+        'touch_feedback': False,
     },
  
 }

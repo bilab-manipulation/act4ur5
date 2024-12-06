@@ -21,11 +21,8 @@ import cv2
 from sim_env import BOX_POSE
 import sys
 
-from touch import FeedbackLoop
 import IPython
 
-# ros node init for touch senor project alchemist
-import rospy
 
 e = IPython.embed
 
@@ -56,6 +53,15 @@ def main(args):
     camera_names = task_config['camera_names']
     state_dim = task_config['state_dim']
     base_crop = task_config['base_crop']
+    
+    if task_config['touch_feedback']:
+        from touch import FeedbackLoop
+        # ros node init for touch senor project alchemist
+        import rospy
+        import time
+
+        print("=======TOUCH FEEDBACK ON!=========")
+    
     
     
     if os.path.isdir(args['gello_dir']):
@@ -204,7 +210,8 @@ def main(args):
         'temporal_agg': args['temporal_agg'],
         'camera_names': camera_names,
         'real_robot': not is_sim,
-        'gello_env': env 
+        'gello_env': env,
+        'touch_feedback': task_config['touch_feedback'],
     }
 
     if is_eval:
@@ -296,10 +303,12 @@ def eval_bc(config, ckpt_name, base_crop, save_episode=True):
     temporal_agg = config['temporal_agg']
     onscreen_cam = 'angle'
     env = config['gello_env']
+    feedback_on = config['touch_feedback']
     
     
-    rospy.init_node('gripper_srbl', anonymous=True)
-    gripper_feedback = FeedbackLoop()
+    if feedback_on:
+        rospy.init_node('gripper_srbl', anonymous=True)
+        gripper_feedback = FeedbackLoop()
     
 
     # load policy and stats
@@ -366,6 +375,8 @@ def eval_bc(config, ckpt_name, base_crop, save_episode=True):
         rewards = []
         with torch.inference_mode():
             for t in range(max_timesteps):
+                tic = time.time()
+
                 ### update onscreen render and wait for DT
                 if onscreen_render:
                     # image = env._physics.render(height=480, width=640, camera_id=onscreen_cam)
@@ -417,13 +428,14 @@ def eval_bc(config, ckpt_name, base_crop, save_episode=True):
                 action = post_process(raw_action)
                 target_qpos = action
                 
-                assert len(target_qpos) == 7, "target qpos should be 7 from now on... need to be changed TODO"
-                # original_gripper_pos = target_qpos[-1]
-                # # REVISED BY TOUCH SENSOR TEAM
-                # print("GRIPPER POS ORIGINAL", original_gripper_pos)
-                # new_gripper_pos = gripper_feedback.feedback(original_gripper_pos)
-                # print("NEW GRIPPER POS", new_gripper_pos)
-                # target_qpos[-1] = new_gripper_pos
+                if feedback_on:
+                    assert len(target_qpos) == 7, "target qpos should be 7 from now on... need to be changed TODO"
+                    original_gripper_pos = target_qpos[-1]
+                    # REVISED BY TOUCH SENSOR TEAM
+                    print("GRIPPER POS ORIGINAL", original_gripper_pos)
+                    new_gripper_pos = gripper_feedback.feedback(original_gripper_pos)
+                    print("NEW GRIPPER POS", new_gripper_pos)
+                    target_qpos[-1] = new_gripper_pos
                 print("target qpos", target_qpos)
                 ### step the environment
                 env.step(target_qpos) # ts = env.step(target_qpos)
@@ -432,7 +444,7 @@ def eval_bc(config, ckpt_name, base_crop, save_episode=True):
                 qpos_list.append(qpos_numpy)
                 target_qpos_list.append(target_qpos)
                 rewards.append(0)
-
+                print("ELAPSED TIME", time.time() - tic)
             # plt.close()
         if real_robot:
             # move_grippers([env.puppet_bot_left, env.puppet_bot_right], [PUPPET_GRIPPER_JOINT_OPEN] * 2, move_time=0.5)  # open
