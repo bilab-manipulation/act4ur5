@@ -9,10 +9,11 @@ import IPython
 e = IPython.embed
 
 class EpisodicDataset(torch.utils.data.Dataset):
-    def __init__(self, episode_ids, dataset_dir, camera_names, norm_stats, base_crop):
+    def __init__(self, episode_ids, dataset_dir, arti_dataset_dir, camera_names, norm_stats, base_crop):
         super(EpisodicDataset).__init__()
         self.episode_ids = episode_ids
         self.dataset_dir = dataset_dir
+        self.arti_dataset_dir = arti_dataset_dir
         self.camera_names = camera_names
         self.norm_stats = norm_stats
         self.is_sim = None
@@ -84,7 +85,43 @@ class EpisodicDataset(torch.utils.data.Dataset):
         action_data = (action_data - self.norm_stats["action_mean"]) / self.norm_stats["action_std"]
         qpos_data = (qpos_data - self.norm_stats["qpos_mean"]) / self.norm_stats["qpos_std"]
 
+        
+
         return image_data.float(), qpos_data.float(), action_data.float(), is_pad
+    
+    def _load_arti_data(self):
+        total_valid_paths = []
+        dir = self.arti_dataset_dir
+
+        # mpn loader에 담을 모든 데이터 (train , val, test split을 담음)
+        # NOTE: 여기서 dir은 '../pose_data/'... all 아니면 ../pose_data/train/Table/ 이렇게 됨  
+        #validity check
+        for dirpath, dirname, filenames in os.walk(dir):
+            data_label = dirpath.split('/')[-1]
+            #validity check
+            if dirpath.split('/')[-1].split('_')[0] == 'pose' and len(dirpath.split('/')[-1].split('_')) == 2:
+                print("dirpath", dirpath)
+                if self.real_world:
+                    # spt, cat, inst = dirpath.split('/')[-4:-1]
+                    # assert inst.isdigit(), inst
+                    # inst = int(inst)
+                    if os.path.isfile(os.path.join(dirpath, 'traj.pkl')):
+                        total_valid_paths.append(os.path.join(dirpath, 'traj.pkl'))
+                    
+                else:
+                    assert os.path.isfile(os.path.join(dirpath, 'points_with_sdf_label_binary.ply')) or os.path.isfile(os.path.join(dirpath, 'points_with_labels_binary.ply'))
+                    spt, cat, inst = dirpath.split('/')[-4:-1]
+                    assert inst.isdigit(), inst
+                    inst = int(inst)
+                    assert check_data[inst] == [cat, spt], f"{inst}, {cat}, {spt}, answer: {check_data[inst]}"
+                    # obj_idx = dirpath.split('/')[-2]
+                    # assert obj_idx.isdigit(), obj_idx
+                    if os.path.isfile(os.path.join(dirpath, 'points_with_sdf_label_binary.ply')):
+                        total_valid_paths.append(os.path.join(dirpath, 'points_with_sdf_label_binary.ply'))
+                    elif os.path.isfile(os.path.join(dirpath, 'points_with_labels_binary.ply')):
+                        total_valid_paths.append(os.path.join(dirpath, 'points_with_labels_binary.ply'))
+                    else:
+                        raise NotImplementedError
 
 
 def get_norm_stats(dataset_dir, num_episodes):
@@ -119,20 +156,25 @@ def get_norm_stats(dataset_dir, num_episodes):
     return stats
 
 
-def load_data(dataset_dir, num_episodes, camera_names, batch_size_train, batch_size_val, base_crop):
+def load_data(dataset_dir, arti_dataset_dir, num_episodes, camera_names, batch_size_train, batch_size_val, base_crop):
     print(f'\nData from: {dataset_dir}\n')
     # obtain train test split
-    train_ratio = 0.8
-    shuffled_indices = np.random.permutation(num_episodes)
-    train_indices = shuffled_indices[:int(train_ratio * num_episodes)]
-    val_indices = shuffled_indices[int(train_ratio * num_episodes):]
+    # train_ratio = 0.8
+    # shuffled_indices = np.random.permutation(num_episodes)
+    # train_indices = shuffled_indices[:int(train_ratio * num_episodes)]
+    # val_indices = shuffled_indices[int(train_ratio * num_episodes):]
+    
+    
+    '''
+    
+    '''
 
     # obtain normalization stats for qpos and action
     norm_stats = get_norm_stats(dataset_dir, num_episodes)
 
     # construct dataset and dataloader
-    train_dataset = EpisodicDataset(train_indices, dataset_dir, camera_names, norm_stats, base_crop)
-    val_dataset = EpisodicDataset(val_indices, dataset_dir, camera_names, norm_stats, base_crop)
+    train_dataset = EpisodicDataset(train_indices, dataset_dir, arti_dataset_dir, camera_names, norm_stats, base_crop)
+    val_dataset = EpisodicDataset(val_indices, dataset_dir, arti_dataset_dir, camera_names, norm_stats, base_crop)
     train_dataloader = DataLoader(train_dataset, batch_size=batch_size_train, shuffle=True, pin_memory=True, num_workers=1, prefetch_factor=1)
     val_dataloader = DataLoader(val_dataset, batch_size=batch_size_val, shuffle=True, pin_memory=True, num_workers=1, prefetch_factor=1)
 

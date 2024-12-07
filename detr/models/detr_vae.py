@@ -9,6 +9,7 @@ from .backbone import build_backbone
 from .transformer import build_transformer, TransformerEncoder, TransformerEncoderLayer
 
 import numpy as np
+from typing import Tuple, Dict
 
 import IPython
 e = IPython.embed
@@ -33,7 +34,7 @@ def get_sinusoid_encoding_table(n_position, d_hid):
 
 class DETRVAE(nn.Module):
     """ This is the DETR module that performs object detection """
-    def __init__(self, backbones, transformer, encoder, state_dim, num_queries, camera_names):
+    def __init__(self, backbones, transformer, encoder, state_dim, num_queries, camera_names, node_feat_dim, edge_feat_dim, image_shape: Tuple, num_nodes):
         """ Initializes the model.
         Parameters:
             backbones: torch module of the backbone to be used. See backbone.py
@@ -42,6 +43,10 @@ class DETRVAE(nn.Module):
             num_queries: number of object queries, ie detection slot. This is the maximal number of objects
                          DETR can detect in a single image. For COCO, we recommend 100 queries.
             aux_loss: True if auxiliary decoding losses (loss at each decoder layer) are to be used.
+        
+        
+        node_feat_dim, edge_feat_dim, image_shape: Tuple are for arti project shlim & ksshin
+        
         """
         super().__init__()
         self.num_queries = num_queries
@@ -52,6 +57,15 @@ class DETRVAE(nn.Module):
         self.action_head = nn.Linear(hidden_dim, state_dim)
         self.is_pad_head = nn.Linear(hidden_dim, 1)
         self.query_embed = nn.Embedding(num_queries, hidden_dim)
+
+        '''
+        arti mode
+        '''
+        self.node_head = nn.Linear(node_feat_dim, hidden_dim)
+        self.edge_head = nn.Linear(edge_feat_dim, hidden_dim)
+        H, W = image_shape[:2]
+        self.mask_head = nn.Linear(H*W, hidden_dim)
+       
         if backbones is not None:
             self.input_proj = nn.Conv2d(backbones[0].num_channels, hidden_dim, kernel_size=1)
             self.backbones = nn.ModuleList(backbones)
@@ -69,13 +83,25 @@ class DETRVAE(nn.Module):
         self.encoder_action_proj = nn.Linear(state_dim, hidden_dim) # project action to embedding
         self.encoder_joint_proj = nn.Linear(state_dim, hidden_dim)  # project qpos to embedding
         self.latent_proj = nn.Linear(hidden_dim, self.latent_dim*2) # project hidden state to latent std, var
+        
+        # arti proj for encoder
+        self.node_proj = nn.Linear(node_feat_dim, hidden_dim)
+        self.edge_proj = nn.Linear(edge_feat_dim, hidden_dim)
+        self.mask_proj = nn.Linear(H*W, hidden_dim)
+        
+        
+        self.arti_dim = num_nodes + num_nodes * num_nodes + num_nodes
+        
         self.register_buffer('pos_table', get_sinusoid_encoding_table(1+1+num_queries, hidden_dim)) # [CLS], qpos, a_seq
 
         # decoder extra parameters
         self.latent_out_proj = nn.Linear(self.latent_dim, hidden_dim) # project latent sample to embedding
-        self.additional_pos_embed = nn.Embedding(2, hidden_dim) # learned position embedding for proprio and latent
+        
+        # arti_mode에 따라 수정
+        self.additional_pos_embed = nn.Embedding(2+self.arti_dim, hidden_dim)
+        # self.additional_pos_embed = nn.Embedding(2, hidden_dim) # learned position embedding for proprio and latent
 
-    def forward(self, qpos, image, env_state, actions=None, is_pad=None):
+    def forward(self, qpos, image, env_state, actions=None, is_pad=None, arti_info: Dict=None):
         """
         qpos: batch, qpos_dim
         image: batch, num_cam, channel, height, width
@@ -85,6 +111,17 @@ class DETRVAE(nn.Module):
         is_training = actions is not None # train or val
         bs, _ = qpos.shape
         ### Obtain latent z from action sequence
+        
+        '''
+        arti_mode
+        '''
+        node_features = arti_info['node_features']
+        _, num_nodes, _ = node_features.shape
+        edge_features = arti_info['edge_features']
+        assert edge_features.shape[1] == num_nodes * num_nodes, edge_features.shape
+        mask_features = arti_info['mask_features']
+        assert mask_features.shape[1] == num_nodes, mask_features.shape
+
         if is_training:
             
             # project action sequence to embedding dim, and concat with a CLS token
@@ -93,11 +130,23 @@ class DETRVAE(nn.Module):
             qpos_embed = torch.unsqueeze(qpos_embed, axis=1)  # (bs, 1, hidden_dim)
             cls_embed = self.cls_embed.weight # (1, hidden_dim)
             cls_embed = torch.unsqueeze(cls_embed, axis=0).repeat(bs, 1, 1) # (bs, 1, hidden_dim)
-            encoder_input = torch.cat([cls_embed, qpos_embed, action_embed], axis=1) # (bs, seq+1, hidden_dim)
-            encoder_input = encoder_input.permute(1, 0, 2) # (seq+1, bs, hidden_dim)
+
+            
+            node_embed = self.node_head(node_features)
+            edge_embed = self.edge_head(edge_features)
+            mask_embed = self.mask_head(mask_features)
+
+
+
+            encoder_input = torch.cat([cls_embed, node_embed, edge_embed, mask_embed, qpos_embed, action_embed], axis=1) # (bs, seq+1+arti_dim, hidden_dim)
+            encoder_input = encoder_input.permute(1, 0, 2) # (seq+1+arti_dim, bs, hidden_dim)
+            arti_dim = num_nodes + num_nodes * num_nodes + num_nodes
+            assert arti_dim == self.arti_dim, arti_dim
             # do not mask cls token
             cls_joint_is_pad = torch.full((bs, 2), False).to(qpos.device) # False: not a padding
-            is_pad = torch.cat([cls_joint_is_pad, is_pad], axis=1)  # (bs, seq+1)
+            arti_joint_is_pad = torch.full((bs, arti_dim), False).to(qpos.device)
+
+            is_pad = torch.cat([cls_joint_is_pad, is_pad, arti_joint_is_pad], axis=1)  # (bs, seq+1+arti_dim)
             # obtain position embedding
             pos_embed = self.pos_table.clone().detach()
             pos_embed = pos_embed.permute(1, 0, 2)  # (seq+1, 1, hidden_dim)
@@ -114,6 +163,18 @@ class DETRVAE(nn.Module):
             latent_sample = torch.zeros([bs, self.latent_dim], dtype=torch.float32).to(qpos.device)
             latent_input = self.latent_out_proj(latent_sample)
 
+        
+        '''
+        arti mode
+        '''
+        node_input = self.node_proj(node_features)
+        edge_input = self.edge_proj(edge_features)
+        mask_input = self.mask_proj(mask_features)
+        
+        arti_input = torch.concat((node_input, edge_input, mask_input), axis=1)
+        
+                
+        
         if self.backbones is not None:
             # Image observation features and position embeddings
             all_cam_features = []
@@ -129,8 +190,9 @@ class DETRVAE(nn.Module):
             # fold camera dimension into width dimension
             src = torch.cat(all_cam_features, axis=3)
             pos = torch.cat(all_cam_pos, axis=3)
-            hs = self.transformer(src, None, self.query_embed.weight, pos, latent_input, proprio_input, self.additional_pos_embed.weight)[0]
+            hs = self.transformer(src, None, self.query_embed.weight, pos, latent_input, proprio_input, arti_input, self.additional_pos_embed.weight)[0]
         else:
+            raise NotImplementedError
             qpos = self.input_proj_robot_state(qpos)
             env_state = self.input_proj_env_state(env_state)
             transformer_input = torch.cat([qpos, env_state], axis=1) # seq length = 2
@@ -241,6 +303,11 @@ def build(args):
 
     encoder = build_encoder(args)
 
+    node_feat_dim = args.node_feat_dim
+    edge_feat_dim = args.edge_feat_dim
+    image_shape = args.image_shape
+    num_nodes = args.num_nodes
+
     model = DETRVAE(
         backbones,
         transformer,
@@ -248,6 +315,11 @@ def build(args):
         state_dim=state_dim,
         num_queries=args.num_queries,
         camera_names=args.camera_names,
+        node_feat_dim=node_feat_dim,
+        edge_feat_dim=edge_feat_dim,
+        image_shape=image_shape,
+        num_nodes=num_nodes,
+        
     )
 
     n_parameters = sum(p.numel() for p in model.parameters() if p.requires_grad)

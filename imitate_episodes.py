@@ -32,6 +32,9 @@ def main(args):
     batch_size_train = args['batch_size']
     batch_size_val = args['batch_size']
     num_epochs = args['num_epochs']
+    node_feat_dim = args['node_feat_dim']
+    edge_feat_dim = args['edge_feat_dim']
+    image_shape = args['image_shape']
 
     # get task parameters
     is_sim = task_name[:4] == 'sim_'
@@ -42,9 +45,11 @@ def main(args):
         from aloha_scripts.constants import TASK_CONFIGS
         task_config = TASK_CONFIGS[task_name]
     dataset_dir = task_config['dataset_dir']
+    arti_dataset_dir = task_config['arti_dataset_dir']
     num_episodes = task_config['num_episodes']
     episode_len = task_config['episode_len']
     camera_names = task_config['camera_names']
+    num_nodes = task_config['num_nodes']
     #arti setting
     base_crop = task_config['base_crop']
 
@@ -68,9 +73,14 @@ def main(args):
                          'dec_layers': dec_layers,
                          'nheads': nheads,
                          'camera_names': camera_names,
-                         'state_dim': state_dim
+                         'state_dim': state_dim,
+                         'node_feat_dim': node_feat_dim,
+                         'edge_feat_dim': edge_feat_dim,
+                         'image_shape': image_shape,
+                         'num_nodes': num_nodes,
                          }
     elif policy_class == 'CNNMLP':
+        raise NotImplementedError
         policy_config = {'lr': args['lr'], 'lr_backbone': lr_backbone, 'backbone' : backbone, 'num_queries': 1,
                          'camera_names': camera_names,}
     else:
@@ -104,7 +114,7 @@ def main(args):
         print()
         exit()
 
-    train_dataloader, val_dataloader, stats, _ = load_data(dataset_dir, num_episodes, camera_names, batch_size_train, batch_size_val, base_crop)
+    train_dataloader, val_dataloader, stats, _ = load_data(dataset_dir, arti_dataset_dir, num_episodes, camera_names, batch_size_train, batch_size_val, base_crop)
 
     # save dataset stats
     if not os.path.isdir(ckpt_dir):
