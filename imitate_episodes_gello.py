@@ -53,7 +53,9 @@ def main(args):
     camera_names = task_config['camera_names']
     state_dim = task_config['state_dim']
     base_crop = task_config['base_crop']
-    
+    language_embed_dict_file = task_config['language_embed_dict_file']
+
+
     if task_config['touch_feedback']:
         from touch import FeedbackLoop
         # ros node init for touch senor project alchemist
@@ -226,7 +228,7 @@ def main(args):
         print()
         exit()
 
-    train_dataloader, val_dataloader, stats, _ = load_data(dataset_dir, num_episodes, camera_names, batch_size_train, batch_size_val, base_crop)
+    train_dataloader, val_dataloader, stats, _ = load_data(dataset_dir, num_episodes, camera_names, batch_size_train, batch_size_val, base_crop, language_embed_dict_file)
 
     # save dataset stats
     if not os.path.isdir(ckpt_dir):

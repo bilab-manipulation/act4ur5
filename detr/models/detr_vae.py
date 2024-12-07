@@ -84,21 +84,30 @@ class DETRVAE(nn.Module):
         self.encoder_joint_proj = nn.Linear(state_dim, hidden_dim)  # project qpos to embedding
         self.latent_proj = nn.Linear(hidden_dim, self.latent_dim*2) # project hidden state to latent std, var
         
+        
+        self.arti_dim = num_nodes + num_nodes * num_nodes + 1
+        
         # arti proj for encoder
         self.node_proj = nn.Linear(node_feat_dim, hidden_dim)
         self.edge_proj = nn.Linear(edge_feat_dim, hidden_dim)
         self.mask_proj = nn.Linear(H*W, hidden_dim)
+        self.arti_relu1 = nn.ReLU()
+        self.arti_linear1 = nn.Linear(self.arti_dim, 64)
+        self.batchnorm2 = nn.BatchNorm1d(hidden_dim)
+        self.arti_relu2 = nn.ReLU()
+        self.dropout2 = nn.Dropout(0.5)
+        self.arti_linear2 = nn.Linear(64, 1)
         
         
-        self.arti_dim = num_nodes + num_nodes * num_nodes + num_nodes
         
-        self.register_buffer('pos_table', get_sinusoid_encoding_table(1+1+num_queries, hidden_dim)) # [CLS], qpos, a_seq
+        
+        self.register_buffer('pos_table', get_sinusoid_encoding_table(1+1+num_queries+self.arti_dim, hidden_dim)) # [CLS], qpos, a_seq
 
         # decoder extra parameters
         self.latent_out_proj = nn.Linear(self.latent_dim, hidden_dim) # project latent sample to embedding
         
         # arti_mode에 따라 수정
-        self.additional_pos_embed = nn.Embedding(2+self.arti_dim, hidden_dim)
+        self.additional_pos_embed = nn.Embedding(2+1, hidden_dim)
         # self.additional_pos_embed = nn.Embedding(2, hidden_dim) # learned position embedding for proprio and latent
 
     def forward(self, qpos, image, env_state, actions=None, is_pad=None, arti_info: Dict=None):
@@ -119,8 +128,8 @@ class DETRVAE(nn.Module):
         _, num_nodes, _ = node_features.shape
         edge_features = arti_info['edge_features']
         assert edge_features.shape[1] == num_nodes * num_nodes, edge_features.shape
-        mask_features = arti_info['mask_features']
-        assert mask_features.shape[1] == num_nodes, mask_features.shape
+        mask_features = arti_info['mask_features'].unsqueeze(1)
+        # assert mask_features.shape[1] == num_nodes, mask_features.shape
 
         if is_training:
             
@@ -137,19 +146,18 @@ class DETRVAE(nn.Module):
             mask_embed = self.mask_head(mask_features)
 
 
-
             encoder_input = torch.cat([cls_embed, node_embed, edge_embed, mask_embed, qpos_embed, action_embed], axis=1) # (bs, seq+1+arti_dim, hidden_dim)
             encoder_input = encoder_input.permute(1, 0, 2) # (seq+1+arti_dim, bs, hidden_dim)
-            arti_dim = num_nodes + num_nodes * num_nodes + num_nodes
-            assert arti_dim == self.arti_dim, arti_dim
+            arti_dim = self.arti_dim
             # do not mask cls token
             cls_joint_is_pad = torch.full((bs, 2), False).to(qpos.device) # False: not a padding
             arti_joint_is_pad = torch.full((bs, arti_dim), False).to(qpos.device)
 
-            is_pad = torch.cat([cls_joint_is_pad, is_pad, arti_joint_is_pad], axis=1)  # (bs, seq+1+arti_dim)
+            is_pad = torch.cat([cls_joint_is_pad, arti_joint_is_pad, is_pad], axis=1)  # (bs, seq+1+arti_dim)
             # obtain position embedding
             pos_embed = self.pos_table.clone().detach()
             pos_embed = pos_embed.permute(1, 0, 2)  # (seq+1, 1, hidden_dim)
+
             # query model
             encoder_output = self.encoder(encoder_input, pos=pos_embed, src_key_padding_mask=is_pad)
             encoder_output = encoder_output[0] # take cls output only
@@ -171,10 +179,13 @@ class DETRVAE(nn.Module):
         edge_input = self.edge_proj(edge_features)
         mask_input = self.mask_proj(mask_features)
         
-        arti_input = torch.concat((node_input, edge_input, mask_input), axis=1)
-        
-                
-        
+        arti_input = self.arti_relu1(torch.concat((node_input, edge_input, mask_input), axis=1))
+        arti_input = arti_input.transpose(2, 1)
+        arti_input = self.arti_linear1(arti_input)
+        arti_input = self.arti_relu2(self.batchnorm2(arti_input))
+        arti_input = self.dropout2(arti_input)
+        arti_input = self.arti_linear2(arti_input).squeeze(-1)
+
         if self.backbones is not None:
             # Image observation features and position embeddings
             all_cam_features = []

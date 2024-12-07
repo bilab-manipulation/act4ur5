@@ -4,16 +4,23 @@ import os
 import h5py
 from torch.utils.data import TensorDataset, DataLoader
 import cv2
+import json
 
 import IPython
 e = IPython.embed
 
 class EpisodicDataset(torch.utils.data.Dataset):
-    def __init__(self, episode_ids, dataset_dir, arti_dataset_dir, camera_names, norm_stats, base_crop):
+    def __init__(self, dataset_dir, arti_dataset_dir, camera_names, norm_stats, base_crop, language_embed_dict_file, num_nodes, token_dims):
         super(EpisodicDataset).__init__()
-        self.episode_ids = episode_ids
+        # self.episode_ids = episode_ids
         self.dataset_dir = dataset_dir
         self.arti_dataset_dir = arti_dataset_dir
+        assert arti_dataset_dir.split('/')[-1] == 'train' or arti_dataset_dir.split('/')[-1] == 'val'
+        self.num_nodes = num_nodes
+        self.token_dims = token_dims
+        self.total_arti_paths = self._load_arti_data()
+        self.language_embed_dict = np.load(language_embed_dict_file, allow_pickle=True)
+
         self.camera_names = camera_names
         self.norm_stats = norm_stats
         self.is_sim = None
@@ -21,14 +28,79 @@ class EpisodicDataset(torch.utils.data.Dataset):
         self.__getitem__(0) # initialize self.is_sim
 
     def __len__(self):
-        return len(self.episode_ids)
+        # return len(self.episode_ids)
+        return len(self.total_arti_paths)
 
     def __getitem__(self, index):
         sample_full_episode = False # hardcode
 
-        episode_id = self.episode_ids[index]
-        dataset_path = os.path.join(self.dataset_dir, f'episode_{episode_id}.hdf5')
-        with h5py.File(dataset_path, 'r') as root:
+        pkl_data = np.load(self.total_arti_paths[index], allow_pickle=True)
+        pkl_name = pkl_data['path']
+        episode_name = pkl_name.replace('traj','episode')
+        data_date = episode_name.split('_')[0]
+        episode_name = '_'.join(episode_name.split('_')[1:])
+        
+        assert data_date.isdigit(), data_date
+        # base_data_dir = '/'.join(self.dataset_dir.split('/')[:-1])
+        # boundingbox_npy = np.load(os.path.join(base_data_dir, f'cropped_img_{data_date}', f'{pkl_name}.npy'), allow_pickle=True).item()
+        # x1, x2, y1, y2 = boundingbox_npy['x1'], boundingbox_npy['x2'], boundingbox_npy['y1'], boundingbox_npy['y2']
+        # mask = np.zeros((480, 640), np.int64)
+
+        label = pkl_data['label'].reshape(-1) # shape (y2-y1, x2-x1)
+
+        arti_info = {}
+        arti_info['mask_features'] = torch.tensor(label)
+
+        '''
+        arti_info
+        node_features
+        edge_features
+        mask_features
+        '''
+        arti_path = self.total_arti_paths[index]
+        pose_dir = '/'.join(arti_path.split('/')[:-1])
+        instance_dir = '/'.join(arti_path.split('/')[:-2])
+        joint_path = os.path.join(pose_dir, 'joint_cfg.json')
+        link_path =  os.path.join(instance_dir, 'link_cfg.json')
+
+        
+        with open(link_path, 'r') as f:
+            instance_pose_json = json.load(f)
+
+        node_features = torch.zeros(self.num_nodes, self.token_dims) # HARDCODED
+        for instance_pose_dict in instance_pose_json.values():
+            
+            if instance_pose_dict['index'] != 0:
+                idx = instance_pose_dict['index'] - 1 #HARDCODED 0은 없었다.
+                # encoded_feat = angle.encode([instance_pose_dict['name']], to_numpy=False)[0] #N 768
+                node_features[idx] = torch.tensor(self.language_embed_dict[instance_pose_dict['name']])
+                norm = torch.norm(node_features[idx], p=2, dim=-1, keepdim=True)
+                # 벡터를 노름으로 나누어 단위 벡터를 만듭니다.
+                node_features[idx] = node_features[idx] / (norm + 1e-6)
+        
+        arti_info['node_features'] = node_features
+
+        edge_features = torch.zeros(self.num_nodes, self.num_nodes, 5, dtype=torch.float32)
+       
+        # joint information도 추가
+        with open(joint_path, 'r') as f:
+            joint_dict = json.load(f)
+        
+        for joint_info in joint_dict.values():
+            edge_features[joint_info['parent_link']['index']-1][joint_info['child_link']['index']-1][0] = 1
+            qpos_range = joint_info['qpos_limit'][1] - joint_info['qpos_limit'][0]
+
+            if joint_info['type'] == 'prismatic':
+                edge_features[joint_info['parent_link']['index']-1][joint_info['child_link']['index']-1][1] = 1
+                edge_features[joint_info['parent_link']['index']-1][joint_info['child_link']['index']-1][3] = (joint_info['qpos'] - joint_info['qpos_limit'][0]) / qpos_range
+            else:
+                assert joint_info['type'] == 'revolute_unwrapped', joint_info['type']
+                edge_features[joint_info['parent_link']['index']-1][joint_info['child_link']['index']-1][2] = 1
+                edge_features[joint_info['parent_link']['index']-1][joint_info['child_link']['index']-1][4] = (joint_info['qpos'] - joint_info['qpos_limit'][0]) / qpos_range        
+        edge_features = edge_features.reshape(-1, 5)
+        arti_info['edge_features'] = edge_features
+
+        with h5py.File(os.path.join(self.dataset_dir, episode_name+'.hdf5'), 'r') as root:
             is_sim = root.attrs['sim']
             original_action_shape = root['/action'].shape
             episode_len = original_action_shape[0]
@@ -58,6 +130,7 @@ class EpisodicDataset(torch.utils.data.Dataset):
             else:
                 action = root['/action'][max(0, start_ts - 1):] # hack, to make timesteps more aligned
                 action_len = episode_len - max(0, start_ts - 1) # hack, to make timesteps more aligned
+        
 
         self.is_sim = is_sim
         padded_action = np.zeros(original_action_shape, dtype=np.float32)
@@ -87,7 +160,7 @@ class EpisodicDataset(torch.utils.data.Dataset):
 
         
 
-        return image_data.float(), qpos_data.float(), action_data.float(), is_pad
+        return image_data.float(), qpos_data.float(), action_data.float(), is_pad, arti_info
     
     def _load_arti_data(self):
         total_valid_paths = []
@@ -100,28 +173,16 @@ class EpisodicDataset(torch.utils.data.Dataset):
             data_label = dirpath.split('/')[-1]
             #validity check
             if dirpath.split('/')[-1].split('_')[0] == 'pose' and len(dirpath.split('/')[-1].split('_')) == 2:
-                print("dirpath", dirpath)
-                if self.real_world:
-                    # spt, cat, inst = dirpath.split('/')[-4:-1]
-                    # assert inst.isdigit(), inst
-                    # inst = int(inst)
-                    if os.path.isfile(os.path.join(dirpath, 'traj.pkl')):
+                # spt, cat, inst = dirpath.split('/')[-4:-1]
+                # assert inst.isdigit(), inst
+                # inst = int(inst)
+                if os.path.isfile(os.path.join(dirpath, 'traj.pkl')):
+                    t = np.load(os.path.join(dirpath, 'traj.pkl'), allow_pickle=True)
+                    if 'path' in t.keys():
+                        print("dirpath", dirpath)
                         total_valid_paths.append(os.path.join(dirpath, 'traj.pkl'))
-                    
-                else:
-                    assert os.path.isfile(os.path.join(dirpath, 'points_with_sdf_label_binary.ply')) or os.path.isfile(os.path.join(dirpath, 'points_with_labels_binary.ply'))
-                    spt, cat, inst = dirpath.split('/')[-4:-1]
-                    assert inst.isdigit(), inst
-                    inst = int(inst)
-                    assert check_data[inst] == [cat, spt], f"{inst}, {cat}, {spt}, answer: {check_data[inst]}"
-                    # obj_idx = dirpath.split('/')[-2]
-                    # assert obj_idx.isdigit(), obj_idx
-                    if os.path.isfile(os.path.join(dirpath, 'points_with_sdf_label_binary.ply')):
-                        total_valid_paths.append(os.path.join(dirpath, 'points_with_sdf_label_binary.ply'))
-                    elif os.path.isfile(os.path.join(dirpath, 'points_with_labels_binary.ply')):
-                        total_valid_paths.append(os.path.join(dirpath, 'points_with_labels_binary.ply'))
-                    else:
-                        raise NotImplementedError
+        return total_valid_paths
+              
 
 
 def get_norm_stats(dataset_dir, num_episodes):
@@ -156,7 +217,7 @@ def get_norm_stats(dataset_dir, num_episodes):
     return stats
 
 
-def load_data(dataset_dir, arti_dataset_dir, num_episodes, camera_names, batch_size_train, batch_size_val, base_crop):
+def load_data(dataset_dir, arti_dataset_dir, num_episodes, camera_names, batch_size_train, batch_size_val, base_crop, language_embed_dict_file, num_nodes, node_feat_dim):
     print(f'\nData from: {dataset_dir}\n')
     # obtain train test split
     # train_ratio = 0.8
@@ -164,17 +225,13 @@ def load_data(dataset_dir, arti_dataset_dir, num_episodes, camera_names, batch_s
     # train_indices = shuffled_indices[:int(train_ratio * num_episodes)]
     # val_indices = shuffled_indices[int(train_ratio * num_episodes):]
     
-    
-    '''
-    
-    '''
 
     # obtain normalization stats for qpos and action
     norm_stats = get_norm_stats(dataset_dir, num_episodes)
 
     # construct dataset and dataloader
-    train_dataset = EpisodicDataset(train_indices, dataset_dir, arti_dataset_dir, camera_names, norm_stats, base_crop)
-    val_dataset = EpisodicDataset(val_indices, dataset_dir, arti_dataset_dir, camera_names, norm_stats, base_crop)
+    train_dataset = EpisodicDataset(dataset_dir, os.path.join(arti_dataset_dir, 'train'), camera_names, norm_stats, base_crop, language_embed_dict_file, num_nodes, node_feat_dim)
+    val_dataset = EpisodicDataset(dataset_dir, os.path.join(arti_dataset_dir, 'val'), camera_names, norm_stats, base_crop, language_embed_dict_file, num_nodes, node_feat_dim)
     train_dataloader = DataLoader(train_dataset, batch_size=batch_size_train, shuffle=True, pin_memory=True, num_workers=1, prefetch_factor=1)
     val_dataloader = DataLoader(val_dataset, batch_size=batch_size_val, shuffle=True, pin_memory=True, num_workers=1, prefetch_factor=1)
 

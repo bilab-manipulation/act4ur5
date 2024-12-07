@@ -32,9 +32,7 @@ def main(args):
     batch_size_train = args['batch_size']
     batch_size_val = args['batch_size']
     num_epochs = args['num_epochs']
-    node_feat_dim = args['node_feat_dim']
-    edge_feat_dim = args['edge_feat_dim']
-    image_shape = args['image_shape']
+    
 
     # get task parameters
     is_sim = task_name[:4] == 'sim_'
@@ -50,6 +48,11 @@ def main(args):
     episode_len = task_config['episode_len']
     camera_names = task_config['camera_names']
     num_nodes = task_config['num_nodes']
+    node_feat_dim = task_config['node_feat_dim']
+    edge_feat_dim = task_config['edge_feat_dim']
+    image_shape = task_config['image_shape']
+
+    language_embed_dict_file = task_config['language_embed_dict_file']
     #arti setting
     base_crop = task_config['base_crop']
 
@@ -114,7 +117,7 @@ def main(args):
         print()
         exit()
 
-    train_dataloader, val_dataloader, stats, _ = load_data(dataset_dir, arti_dataset_dir, num_episodes, camera_names, batch_size_train, batch_size_val, base_crop)
+    train_dataloader, val_dataloader, stats, _ = load_data(dataset_dir, arti_dataset_dir, num_episodes, camera_names, batch_size_train, batch_size_val, base_crop, language_embed_dict_file, num_nodes, node_feat_dim)
 
     # save dataset stats
     if not os.path.isdir(ckpt_dir):
@@ -328,9 +331,12 @@ def eval_bc(config, ckpt_name, save_episode=True):
 
 
 def forward_pass(data, policy):
-    image_data, qpos_data, action_data, is_pad = data
+    image_data, qpos_data, action_data, is_pad, arti_info = data
     image_data, qpos_data, action_data, is_pad = image_data.cuda(), qpos_data.cuda(), action_data.cuda(), is_pad.cuda()
-    return policy(qpos_data, image_data, action_data, is_pad) # TODO remove None
+    
+    for k in arti_info.keys():
+        arti_info[k] = arti_info[k].cuda()
+    return policy(qpos_data, image_data, action_data, is_pad, arti_info) # TODO remove None
 
 
 def train_bc(train_dataloader, val_dataloader, config):

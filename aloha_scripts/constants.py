@@ -14,12 +14,9 @@ TASK_CONFIGS = {
         'state_dim': 7,
         'touch_feedback': False,
     },
- 
-}
 
-TASK_CONFIGS = {
     'box':{
-        'dataset_dir': DATA_DIR + '/box',
+        'dataset_dir': DATA_DIR + '/pose_data_box/arti_info_1203',
         'num_episodes': 100,
         'episode_len': 300,
         'camera_names': ['wrist', 'base'],
@@ -33,9 +30,11 @@ TASK_CONFIGS = {
         'image_shape': (480, 640),
         'num_nodes': 10,
         'arti_dataset_dir': 'pose_data_box',
+        'language_embed_dict_file': 'part_embed_list_768.pkl'
     },
  
 }
+
 
 ### Simulation envs fixed constants
 # DT = 0.02
