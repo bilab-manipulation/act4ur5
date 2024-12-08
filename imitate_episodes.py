@@ -193,6 +193,11 @@ def eval_bc(config, ckpt_name, save_episode=True):
 
     pre_process = lambda s_qpos: (s_qpos - stats['qpos_mean']) / stats['qpos_std']
     post_process = lambda a: a * stats['action_std'] + stats['action_mean']
+    
+    
+    '''
+    arti info
+    '''
 
     # load environment
     if real_robot:
@@ -260,10 +265,25 @@ def eval_bc(config, ckpt_name, save_episode=True):
                 qpos_history[:, t] = qpos
                 curr_image = get_image(ts, camera_names)
 
+                
+                
+                '''
+                TODO:여기서 arti_info만들기
+                '''
+                arti_info = None
+                
+                
+                
+                '''
+                --------
+                '''
+                
+                
                 ### query policy
                 if config['policy_class'] == "ACT":
                     if t % query_frequency == 0:
-                        all_actions = policy(qpos, curr_image)
+                        
+                        all_actions = policy(qpos, curr_image, arti_info=arti_info)
                     if temporal_agg:
                         all_time_actions[[t], t:t+num_queries] = all_actions
                         actions_for_curr_step = all_time_actions[:, t]

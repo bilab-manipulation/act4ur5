@@ -1,6 +1,18 @@
 import torch
 import numpy as np
 import os
+
+'''
+TODO: 후에 자동화, hardcoding!
+1208 lsh
+'''
+ARTICULATION_PATH = ''
+CONFIG_PATH = ''
+
+sys.path.append(ARTICULATION_PATH)
+from main_e2e import OneShotInference
+
+
 import pickle
 import argparse
 import matplotlib.pyplot as plt
@@ -48,11 +60,19 @@ def main(args):
         from aloha_scripts.constants import TASK_CONFIGS
         task_config = TASK_CONFIGS[task_name]
     dataset_dir = task_config['dataset_dir']
+    arti_dataset_dir = task_config['arti_dataset_dir']
+    
     num_episodes = task_config['num_episodes']
     episode_len = task_config['episode_len']
     camera_names = task_config['camera_names']
     state_dim = task_config['state_dim']
     base_crop = task_config['base_crop']
+    
+    num_nodes = task_config['num_nodes']
+    node_feat_dim = task_config['node_feat_dim']
+    edge_feat_dim = task_config['edge_feat_dim']
+    image_shape = task_config['image_shape']
+
     language_embed_dict_file = task_config['language_embed_dict_file']
 
 
@@ -70,7 +90,8 @@ def main(args):
         sys.path.append(args['gello_dir'])
         from gello.env import RobotEnv # type: ignore
         from gello.zmq_core.robot_node import ZMQClientRobot # type: ignore
-        from gello.cameras.realsense_camera import LogitechCamera, RealSenseCamera, get_device_ids # type: ignore
+        from gello.cameras.realsense_camera import LogitechCamera, RealSenseCamera, RealSenseCameraRos, get_device_ids # type: ignore
+        arti_check = False # 1208 확인용
         if len(camera_names) >= 2:
             if state_dim == 14:
                 ## 먼저 realsense수 체크
@@ -88,9 +109,11 @@ def main(args):
                 camera_clients = {
                     # you can optionally add camera nodes here for imitation learning purposes
                     "wrist": RealSenseCamera(),
-                    "base": LogitechCamera(device_id='/dev/frontcam')
+                    "base": LogitechCamera(device_id='/dev/frontcam'),
                     
                 }
+                arti_check = True
+                camera_clients['arti'] = RealSenseCameraRos(topic='camera')
             print("FINISH")
         else:
             if state_dim == 14:
@@ -108,7 +131,7 @@ def main(args):
                 }
         robot_client = ZMQClientRobot(port=6001, host="127.0.0.1")
         env = RobotEnv(robot_client, control_rate_hz=50, camera_dict=camera_clients)
-
+        assert arti_check, "arti check mode for test.... TEMPORARY"
         if state_dim == 14:
             # dynamixel control box port map (to distinguish left and right gello)
             
@@ -159,6 +182,7 @@ def main(args):
         
         # going to start position
         print("Going to start position")
+        scan_cam = camera_clients['arti']
 
         time.sleep(1)
     else:
@@ -189,10 +213,15 @@ def main(args):
                          'dec_layers': dec_layers,
                          'nheads': nheads,
                          'camera_names': camera_names,
-                         'state_dim': state_dim
+                         'state_dim': state_dim,
+                         'node_feat_dim': node_feat_dim,
+                         'edge_feat_dim': edge_feat_dim,
+                         'image_shape': image_shape,
+                         'num_nodes': num_nodes,
                          
                          }
     elif policy_class == 'CNNMLP':
+        raise NotImplementedError
         policy_config = {'lr': args['lr'], 'lr_backbone': lr_backbone, 'backbone' : backbone, 'num_queries': 1,
                          'camera_names': camera_names,}
     else:
@@ -220,7 +249,7 @@ def main(args):
         ckpt_names = task_config['ckpt_names'] # ckpt_names = [f'policy_best.ckpt']
         results = []
         for ckpt_name in ckpt_names:
-            success_rate, avg_return = eval_bc(config, ckpt_name, base_crop, save_episode=True)
+            success_rate, avg_return = eval_bc(config, ckpt_name, base_crop, scan_cam, save_episode=True)
             results.append([ckpt_name, success_rate, avg_return])
 
         for ckpt_name, success_rate, avg_return in results:
@@ -228,7 +257,7 @@ def main(args):
         print()
         exit()
 
-    train_dataloader, val_dataloader, stats, _ = load_data(dataset_dir, num_episodes, camera_names, batch_size_train, batch_size_val, base_crop, language_embed_dict_file)
+    train_dataloader, val_dataloader, stats, _ = load_data(dataset_dir, arti_dataset_dir, num_episodes, camera_names, batch_size_train, batch_size_val, base_crop, language_embed_dict_file, num_nodes, node_feat_dim)
 
     # save dataset stats
     if not os.path.isdir(ckpt_dir):
@@ -291,7 +320,7 @@ def get_image(camera_names, base_crop, obs):
     return curr_image
 
 
-def eval_bc(config, ckpt_name, base_crop, save_episode=True):
+def eval_bc(config, ckpt_name, base_crop, scan_cam, save_episode=True):
     set_seed(1000)
     ckpt_dir = config['ckpt_dir']
     state_dim = config['state_dim']
@@ -311,6 +340,9 @@ def eval_bc(config, ckpt_name, base_crop, save_episode=True):
     if feedback_on:
         rospy.init_node('gripper_srbl', anonymous=True)
         gripper_feedback = FeedbackLoop()
+    
+    # for arti mode
+    arti_model = OneShotInference(CONFIG_PATH)
     
 
     # load policy and stats
@@ -375,6 +407,20 @@ def eval_bc(config, ckpt_name, base_crop, save_episode=True):
         qpos_list = []
         target_qpos_list = []
         rewards = []
+        
+        '''
+        NOTICE: arti info는 에피소드랑 한번만 들어가도록 한다.
+        추후에는 dynamic하게 사용할 수도 있는듯
+        '''
+        arti_pc, arti_rgb = scan_cam.get_pc()
+        
+        arti_pc = torch.tensor(arti_pc)
+        arti_rgb = torch.tensor(arti_rgb)
+        arti_model = arti_model.cuda()
+        
+        arti_info = arti_model(arti_pc, arti_rgb)
+
+
         with torch.inference_mode():
             for t in range(max_timesteps):
                 tic = time.time()
@@ -407,7 +453,9 @@ def eval_bc(config, ckpt_name, base_crop, save_episode=True):
                 ### query policy
                 if config['policy_class'] == "ACT":
                     if t % query_frequency == 0:
-                        all_actions = policy(qpos, curr_image)
+                        # TODO: arti_info도 들어가야함
+                        
+                        all_actions = policy(qpos, curr_image, arti_info=arti_info)
                     if temporal_agg:
                         all_time_actions[[t], t:t+num_queries] = all_actions
                         actions_for_curr_step = all_time_actions[:, t]
@@ -485,9 +533,13 @@ def eval_bc(config, ckpt_name, base_crop, save_episode=True):
 
 
 def forward_pass(data, policy):
-    image_data, qpos_data, action_data, is_pad = data
+    image_data, qpos_data, action_data, is_pad, arti_info = data
     image_data, qpos_data, action_data, is_pad = image_data.cuda(), qpos_data.cuda(), action_data.cuda(), is_pad.cuda()
-    return policy(qpos_data, image_data, action_data, is_pad) # TODO remove None
+    
+    for k in arti_info.keys():
+        arti_info[k] = arti_info[k].cuda()
+        
+    return policy(qpos_data, image_data, action_data, is_pad, arti_info) # TODO remove None
 
 
 def train_bc(train_dataloader, val_dataloader, config):
