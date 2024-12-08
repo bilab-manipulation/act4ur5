@@ -5,9 +5,41 @@ import h5py
 from torch.utils.data import TensorDataset, DataLoader
 import cv2
 import json
+import random
 
 import IPython
 e = IPython.embed
+
+def random_permute_label_order(num_nodes, node_features: torch.tensor, edge_features: torch.tensor, mask_features: torch.tensor):
+    """
+    node_features: shape (num_nodes, feature_dim)
+    edge_features: shape (num_nodes, num_nodes, edge_feature_dim)
+    mask_features: shape (height*width,) with labels in [0, num_nodes-1]
+    
+    모든 입력은 torch.Tensor라 가정.
+    """
+    # random permutation of labels
+    perm = torch.randperm(num_nodes)  # 0~num_nodes-1 까지 랜덤하게 섞은 순열
+
+    # node_features permute
+    # node_features: (num_nodes, feature_dim)
+    permuted_node_features = node_features[perm]
+
+    # edge_features permute
+    # edge_features: (num_nodes, num_nodes, edge_feature_dim)
+    # 첫 번째 차원과 두 번째 차원을 같은 perm으로 재배열
+    permuted_edge_features = edge_features[perm][:, perm]
+
+    mask_features = mask_features.long()
+    # mask_features permute
+    # mask_features: (height*width,) 각 값이 0 ~ num_nodes-1
+    # perm 텐서는 old_label -> new_label 맵핑을 내장 (perm[i] = new_label_of_old_label_i)
+    # mask_features 안의 라벨을 perm을 통해 매핑
+    permuted_mask_features = perm[mask_features].float()
+
+    return permuted_node_features, permuted_edge_features, permuted_mask_features, perm
+    
+    
 
 class EpisodicDataset(torch.utils.data.Dataset):
     def __init__(self, dataset_dir, arti_dataset_dir, camera_names, norm_stats, base_crop, language_embed_dict_file, num_nodes, token_dims):
@@ -16,6 +48,7 @@ class EpisodicDataset(torch.utils.data.Dataset):
         self.dataset_dir = dataset_dir
         self.arti_dataset_dir = arti_dataset_dir
         assert arti_dataset_dir.split('/')[-1] == 'train' or arti_dataset_dir.split('/')[-1] == 'val'
+        self.split = arti_dataset_dir.split('/')[-1]
         self.num_nodes = num_nodes
         self.token_dims = token_dims
         self.total_arti_paths = self._load_arti_data()
@@ -49,7 +82,6 @@ class EpisodicDataset(torch.utils.data.Dataset):
         label = pkl_data['label'].reshape(-1) # shape (y2-y1, x2-x1)
 
         arti_info = {}
-        arti_info['mask_features'] = torch.tensor(label)
 
         '''
         arti_info
@@ -78,7 +110,6 @@ class EpisodicDataset(torch.utils.data.Dataset):
                 # 벡터를 노름으로 나누어 단위 벡터를 만듭니다.
                 node_features[idx] = node_features[idx] / (norm + 1e-6)
         
-        arti_info['node_features'] = node_features
 
         edge_features = torch.zeros(self.num_nodes, self.num_nodes, 5, dtype=torch.float32)
        
@@ -97,8 +128,19 @@ class EpisodicDataset(torch.utils.data.Dataset):
                 assert joint_info['type'] == 'revolute_unwrapped', joint_info['type']
                 edge_features[joint_info['parent_link']['index']-1][joint_info['child_link']['index']-1][2] = 1
                 edge_features[joint_info['parent_link']['index']-1][joint_info['child_link']['index']-1][4] = (joint_info['qpos'] - joint_info['qpos_limit'][0]) / qpos_range        
+        
+        label = torch.tensor(label)
+        
+        if self.split == 'train':
+            node_features, edge_features, label, _ = random_permute_label_order(self.num_nodes, node_features, edge_features, label)
+        
+        
+        arti_info['node_features'] = node_features
         edge_features = edge_features.reshape(-1, 5)
         arti_info['edge_features'] = edge_features
+        
+        arti_info['mask_features'] = label
+        
 
         with h5py.File(os.path.join(self.dataset_dir, episode_name+'.hdf5'), 'r') as root:
             is_sim = root.attrs['sim']
