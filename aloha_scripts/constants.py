@@ -18,7 +18,7 @@ TASK_CONFIGS = {
     'box':{
         'dataset_dir': DATA_DIR + '/pose_data_box/arti_info_1203',
         'num_episodes': 100,
-        'episode_len': 300,
+        'episode_len': 700,
         'camera_names': ['wrist', 'base', 'arti'],
         # 'camera_names': ['wrist_left', 'wrist_right', 'base'],
         'ckpt_names': ['policy_best.ckpt'],
