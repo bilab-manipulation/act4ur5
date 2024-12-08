@@ -19,7 +19,7 @@ TASK_CONFIGS = {
         'dataset_dir': DATA_DIR + '/pose_data_box/arti_info_1203',
         'num_episodes': 100,
         'episode_len': 300,
-        'camera_names': ['wrist', 'base'],
+        'camera_names': ['wrist', 'base', 'arti'],
         # 'camera_names': ['wrist_left', 'wrist_right', 'base'],
         'ckpt_names': ['policy_best.ckpt'],
         'base_crop': False, # whether to crop the base image or not (mbn demo)
