@@ -10,7 +10,9 @@ import random
 import IPython
 e = IPython.embed
 
-def random_permute_label_order(num_nodes, node_features: torch.tensor, edge_features: torch.tensor, mask_features: torch.tensor):
+# def random_permute_label_order(num_nodes, node_features: torch.tensor, edge_features: torch.tensor, mask_features: torch.tensor):
+def random_permute_label_order(num_nodes, node_features: torch.tensor, edge_features: torch.tensor):
+    
     """
     node_features: shape (num_nodes, feature_dim)
     edge_features: shape (num_nodes, num_nodes, edge_feature_dim)
@@ -30,14 +32,16 @@ def random_permute_label_order(num_nodes, node_features: torch.tensor, edge_feat
     # 첫 번째 차원과 두 번째 차원을 같은 perm으로 재배열
     permuted_edge_features = edge_features[perm][:, perm]
 
-    mask_features = mask_features.long()
+    # mask_features = mask_features.long()
     # mask_features permute
     # mask_features: (height*width,) 각 값이 0 ~ num_nodes-1
     # perm 텐서는 old_label -> new_label 맵핑을 내장 (perm[i] = new_label_of_old_label_i)
     # mask_features 안의 라벨을 perm을 통해 매핑
-    permuted_mask_features = perm[mask_features].float()
+    # permuted_mask_features = perm[mask_features].float()
 
-    return permuted_node_features, permuted_edge_features, permuted_mask_features, perm
+
+    # return permuted_node_features, permuted_edge_features, permuted_mask_features, perm
+    return permuted_node_features, permuted_edge_features, perm
     
     
 
@@ -79,7 +83,7 @@ class EpisodicDataset(torch.utils.data.Dataset):
         # x1, x2, y1, y2 = boundingbox_npy['x1'], boundingbox_npy['x2'], boundingbox_npy['y1'], boundingbox_npy['y2']
         # mask = np.zeros((480, 640), np.int64)
 
-        label = pkl_data['label'].reshape(-1) # shape (y2-y1, x2-x1)
+        # label = pkl_data['label'].reshape(-1) # shape (y2-y1, x2-x1)
 
         arti_info = {}
 
@@ -129,17 +133,18 @@ class EpisodicDataset(torch.utils.data.Dataset):
                 edge_features[joint_info['parent_link']['index']-1][joint_info['child_link']['index']-1][2] = 1
                 edge_features[joint_info['parent_link']['index']-1][joint_info['child_link']['index']-1][4] = (joint_info['qpos'] - joint_info['qpos_limit'][0]) / qpos_range        
         
-        label = torch.tensor(label)
+        # label = torch.tensor(label)
         
         if self.split == 'train':
-            node_features, edge_features, label, _ = random_permute_label_order(self.num_nodes, node_features, edge_features, label)
+            # node_features, edge_features, label, _ = random_permute_label_order(self.num_nodes, node_features, edge_features, label)
+            node_features, edge_features, _ = random_permute_label_order(self.num_nodes, node_features, edge_features)
         
         
         arti_info['node_features'] = node_features
         edge_features = edge_features.reshape(-1, 5)
         arti_info['edge_features'] = edge_features
         
-        arti_info['mask_features'] = label
+        # arti_info['mask_features'] = label
         
 
         with h5py.File(os.path.join(self.dataset_dir, episode_name+'.hdf5'), 'r') as root:
