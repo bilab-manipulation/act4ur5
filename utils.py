@@ -218,6 +218,11 @@ class EpisodicDataset(torch.utils.data.Dataset):
         #validity check
         for dirpath, dirname, filenames in os.walk(dir):
             data_label = dirpath.split('/')[-1]
+            if not dirpath.split('/')[-2].isdigit():
+                continue
+            instance_num = int(dirpath.split('/')[-2]) #NOTE: HARDCODED for 1212
+            if instance_num != 200:
+                continue
             #validity check
             if dirpath.split('/')[-1].split('_')[0] == 'pose' and len(dirpath.split('/')[-1].split('_')) == 2:
                 # spt, cat, inst = dirpath.split('/')[-4:-1]
@@ -237,6 +242,8 @@ def get_norm_stats(dataset_dir, num_episodes):
     all_action_data = []
     for episode_idx in range(num_episodes):
         dataset_path = os.path.join(dataset_dir, f'episode_{episode_idx}.hdf5')
+        if not os.path.isfile(dataset_path):
+            continue
         with h5py.File(dataset_path, 'r') as root:
             qpos = root['/observations/qpos'][()]
             qvel = root['/observations/qvel'][()]

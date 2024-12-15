@@ -30,7 +30,25 @@ TASK_CONFIGS = {
         'image_shape': (480, 640),
         'num_nodes': 10,
         'arti_dataset_dir': 'pose_data_box',
-        'language_embed_dict_file': 'part_embed_list_768.pkl'
+        'language_embed_dict_file': 'part_embed_list_1212_768.pkl'
+    },
+    
+    'washing_machine':{
+        'dataset_dir': DATA_DIR + '/pose_data_box/arti_info_1212',
+        'num_episodes': 103,
+        'episode_len': 700,
+        'camera_names': ['base', 'arti'],
+        # 'camera_names': ['wrist_left', 'wrist_right', 'base'],
+        'ckpt_names': ['policy_best.ckpt'],
+        'base_crop': False, # whether to crop the base image or not (mbn demo)
+        'state_dim': 7,
+        ## arti mode
+        'node_feat_dim': 768,
+        'edge_feat_dim': 5,
+        'image_shape': (480, 640),
+        'num_nodes': 10,
+        'arti_dataset_dir': 'pose_data_box',
+        'language_embed_dict_file': 'part_embed_list_1212_768.pkl'
     },
  
 }
