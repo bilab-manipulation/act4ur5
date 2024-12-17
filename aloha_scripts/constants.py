@@ -48,7 +48,8 @@ TASK_CONFIGS = {
         'image_shape': (480, 640),
         'num_nodes': 10,
         'arti_dataset_dir': 'pose_data_box',
-        'language_embed_dict_file': 'part_embed_list_1212_768.pkl'
+        'language_embed_dict_file': 'part_embed_list_1212_768.pkl',
+        'touch_feedback': False,
     },
  
 }

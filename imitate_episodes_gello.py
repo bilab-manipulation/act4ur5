@@ -6,12 +6,15 @@ import os
 TODO: 후에 자동화, hardcoding!
 1208 lsh
 '''
-ARTICULATION_PATH = ''
-CONFIG_PATH = ''
+import time
 
-sys.path.append(ARTICULATION_PATH)
-from main_e2e import OneShotInference
+import sys
+import pickle
+import socket
 
+# Set up socket parameters
+HOST = '114.110.129.13'  # Server IP address
+PORT = 9999  # Port for the server connection
 
 import pickle
 import argparse
@@ -34,13 +37,30 @@ from sim_env import BOX_POSE
 import sys
 
 import IPython
+import open3d as o3d
 
 
 e = IPython.embed
 
 
+def recvall(sock):
+    datalen = int(sock.recv(10).decode("utf-8"))
+    print("[jslee] received data length: ", datalen)
+    fragments = []
+    while datalen:
+        chunk = sock.recv(4096)
+        print("[jslee] received chunk length: ", len(chunk))
+        fragments.append(chunk)
+        datalen -= len(chunk)
+    return b''.join(fragments)
+
 def main(args):
     set_seed(1)
+    
+    import rospy
+    
+    rospy.init_node('gripper_srbl', anonymous=True)
+    
     # command line parameters
     is_eval = args['eval']
     ckpt_dir = args['ckpt_dir']
@@ -79,8 +99,6 @@ def main(args):
     if task_config['touch_feedback']:
         from touch import FeedbackLoop
         # ros node init for touch senor project alchemist
-        import rospy
-        import time
 
         print("=======TOUCH FEEDBACK ON!=========")
     
@@ -108,7 +126,7 @@ def main(args):
                 print("DUAL CAMERA!!!")
                 camera_clients = {
                     # you can optionally add camera nodes here for imitation learning purposes
-                    "wrist": RealSenseCamera(),
+                    # "wrist": RealSenseCamera(),
                     "base": LogitechCamera(device_id='/dev/frontcam'),
                     
                 }
@@ -342,15 +360,16 @@ def eval_bc(config, ckpt_name, base_crop, scan_cam, save_episode=True):
         gripper_feedback = FeedbackLoop()
     
     # for arti mode
-    arti_model = OneShotInference(CONFIG_PATH)
+    # arti_model = OneShotInference(CONFIG_PATH)
     
 
     # load policy and stats
     ckpt_path = os.path.join(ckpt_dir, ckpt_name)
     policy = make_policy(policy_class, policy_config)
-    loading_status = policy.load_state_dict(torch.load(ckpt_path))
+    kk = torch.load(ckpt_path, map_location='cpu', weights_only=True)
+    loading_status = policy.load_state_dict(kk)    
     print(loading_status)
-    policy.cuda()
+    policy = policy.cuda()
     policy.eval()
     print(f'Loaded: {ckpt_path}')
     stats_path = os.path.join(ckpt_dir, f'dataset_stats.pkl')
@@ -413,12 +432,29 @@ def eval_bc(config, ckpt_name, base_crop, scan_cam, save_episode=True):
         추후에는 dynamic하게 사용할 수도 있는듯
         '''
         arti_pc, arti_rgb = scan_cam.get_pc()
+        arti_rgb = np.asarray(arti_rgb)
         
         arti_pc = torch.tensor(arti_pc)
         arti_rgb = torch.tensor(arti_rgb)
-        arti_model = arti_model.cuda()
         
-        arti_info = arti_model(arti_pc, arti_rgb)
+        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        s.connect((HOST, PORT))
+        print(f"Connected to server at {HOST}:{PORT}")
+        
+        try:
+            data = pickle.dumps((arti_pc, arti_rgb))
+            datalen = str(len(data)).zfill(10)
+            
+            # 데이터 길이를 먼저 전송
+            s.send(datalen.encode('utf-8'))
+            s.sendall(data)  # 실제 데이터 전송
+            print("SENDING DATA:", datalen)
+            # 서버로부터 액션 받기
+            arti_info = recvall(s)
+            arti_info = pickle.loads(arti_info)
+            print("received arti info")
+        finally:
+            s.close()
 
 
         with torch.inference_mode():
@@ -656,6 +692,6 @@ if __name__ == '__main__':
     parser.add_argument('--temporal_agg', action='store_true')
     
     # for gello
-    parser.add_argument('--gello_dir', action='store', default='../gello_software', type=str)
+    parser.add_argument('--gello_dir', action='store', default='../', type=str)
 
     main(vars(parser.parse_args()))
