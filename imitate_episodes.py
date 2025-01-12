@@ -254,6 +254,10 @@ def main(args):
 
     if is_eval:
         ckpt_names = task_config['ckpt_names'] # ckpt_names = [f'policy_best.ckpt']
+        config['num_nodes'] = task_config['num_nodes']
+        config['node_feat_dim'] = task_config['node_feat_dim']
+        config['edge_feat_dim'] = task_config['edge_feat_dim']
+        
         results = []
         for ckpt_name in ckpt_names:
             success_rate, avg_return = eval_bc(config, ckpt_name, base_crop, scan_cam, save_episode=True)
@@ -343,9 +347,12 @@ def eval_bc(config, ckpt_name, base_crop, scan_cam, save_episode=True):
     env = config['gello_env']
     feedback_on = config['touch_feedback']
     
+    num_nodes = config['num_nodes']
+    node_feat_dim = config['node_feat_dim']
+    edge_feat_dim = config['edge_feat_dim']
     
     if feedback_on:
-        rospy.init_node('gripper_srbl', anonymous=True)
+        # rospy.init_node('gripper_srbl', anonymous=True)
         gripper_feedback = FeedbackLoop()
     
     # for arti mode
@@ -416,49 +423,74 @@ def eval_bc(config, ckpt_name, base_crop, scan_cam, save_episode=True):
         target_qpos_list = []
         rewards = []
         
-        '''
-        NOTICE: arti info는 에피소드랑 한번만 들어가도록 한다.
-        추후에는 dynamic하게 사용할 수도 있는듯
-        '''
-        arti_pc, arti_rgb = scan_cam.get_pc()
-        arti_rgb = np.asarray(arti_rgb)
         
-        arti_pc = torch.tensor(arti_pc)
-        arti_rgb = torch.tensor(arti_rgb)
         
         s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         s.connect((HOST, PORT))
         print(f"Connected to server at {HOST}:{PORT}")
         
-        try:
-            data = pickle.dumps((arti_pc, arti_rgb))
-            datalen = str(len(data)).zfill(10)
-            
-            # 데이터 길이를 먼저 전송
-            s.send(datalen.encode('utf-8'))
-            s.sendall(data)  # 실제 데이터 전송
-            print("SENDING DATA:", datalen)
-            # 서버로부터 액션 받기
-            arti_info = recvall(s)
-            arti_info = pickle.loads(arti_info)
-            print("received arti info")
-        finally:
-            s.close()
+        target_arti_info = {}
+        lang_split = np.load('part_embed_list_1212_768.pkl', allow_pickle=True)
+        print("WARNING! We are now using 1212 version of the language embedding list. Last modified on Jan 12.")
 
+        if task_name == 'laptop':
+            # HERE, angle_list must be something like [11.2,12.4,15.23, ....]
+            # Input for angle_list
+            angles_input = input("Please enter angles separated by commas (e.g., 11.2,12.4,15.23): ")
+            angle_list = [float(angle.strip()) for angle in angles_input.split(',')]
+            # TODO: task에 따라서 다르게
+            target_arti_info['node_features'] = torch.zeros(1, num_nodes, node_feat_dim)
+            target_arti_info['node_features'][0, 0] = torch.tensor(lang_split['screen'] / np.linalg.norm(lang_split['screen']))
+            target_arti_info['node_features'][0, 1] = torch.tensor(lang_split['base'] / np.linalg.norm(lang_split['base']))
+            
+            # 이렇게 formulation 되도록 되어있음
+            m = torch.mean(target_arti_info['node_features'][0, :2], dim=0)
+            target_arti_info['node_features'][0, 2:] = m
+            
+            
+            target_arti_info['edge_features'] = torch.zeros(1, num_nodes*num_nodes, edge_feat_dim)
+            target_arti_info['edge_features'][0, :, -2:] = 0.5
+            target_arti_info['edge_features'][0, 1, 0] = 1.0
+            target_arti_info['edge_features'][0, 1, 2] = 1.0
+            target_arti_info['edge_features'][0, 1, 4] = angle_features[episode_idx]
+            
+            
+
+        else:
+            raise NotImplementedError
 
         with torch.inference_mode():
             for t in range(max_timesteps):
                 tic = time.time()
 
-                ### update onscreen render and wait for DT
-                if onscreen_render:
-                    # image = env._physics.render(height=480, width=640, camera_id=onscreen_cam)
-                    # plt_img.set_data(image)
-                    # plt.pause(DT)
-                    pass
 
                 ### process previous timestep to get qpos and image_list
                 obs = env.get_obs()
+                
+                total_arti_info = {}
+                try:
+                    arti_pc, arti_rgb = scan_cam.get_pc()
+                    arti_rgb = np.asarray(arti_rgb)
+                    
+                    arti_pc = torch.tensor(arti_pc)
+                    arti_rgb = torch.tensor(arti_rgb)
+                    data = pickle.dumps((arti_pc, arti_rgb))
+                    datalen = str(len(data)).zfill(10)
+                    
+                    # 데이터 길이를 먼저 전송
+                    s.send(datalen.encode('utf-8'))
+                    s.sendall(data)  # 실제 데이터 전송
+                    print("SENDING DATA:", datalen)
+                    # 서버로부터 액션 받기
+                    arti_info = recvall(s)
+                    arti_info = pickle.loads(arti_info)
+                    total_arti_info['start'] = arti_info
+                    total_arti_info['target'] = target_arti_info
+                    total_arti_info['temporal'] = 0.0 # dummy
+                    print("received arti info")
+                except:
+                    print("ARTI model FAILED!!!")
+
 
                 # for camera_name in camera_names:
                 #     camera_name += '_rgb'
@@ -480,7 +512,7 @@ def eval_bc(config, ckpt_name, base_crop, scan_cam, save_episode=True):
                     if t % query_frequency == 0:
                         # TODO: arti_info도 들어가야함
                         
-                        all_actions = policy(qpos, curr_image, arti_info=arti_info)
+                        all_actions = policy(qpos, curr_image, arti_info=total_arti_info)
                     if temporal_agg:
                         all_time_actions[[t], t:t+num_queries] = all_actions
                         actions_for_curr_step = all_time_actions[:, t]
@@ -524,6 +556,9 @@ def eval_bc(config, ckpt_name, base_crop, scan_cam, save_episode=True):
         if real_robot:
             # move_grippers([env.puppet_bot_left, env.puppet_bot_right], [PUPPET_GRIPPER_JOINT_OPEN] * 2, move_time=0.5)  # open
             pass
+        
+        print("CLOSE socket!")
+        s.close()
 
         rewards = np.array(rewards)
         episode_return = np.sum(rewards[rewards!=None])
