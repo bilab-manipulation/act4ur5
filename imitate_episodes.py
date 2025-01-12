@@ -43,7 +43,6 @@ def main(args):
         from aloha_scripts.constants import TASK_CONFIGS
         task_config = TASK_CONFIGS[task_name]
     dataset_dir = task_config['dataset_dir']
-    arti_dataset_dir = task_config['arti_dataset_dir']
     num_episodes = task_config['num_episodes']
     episode_len = task_config['episode_len']
     camera_names = task_config['camera_names']
@@ -68,6 +67,7 @@ def main(args):
         policy_config = {'lr': args['lr'],
                          'num_queries': args['chunk_size'],
                          'kl_weight': args['kl_weight'],
+                         'temporal_weight': args['temporal_weight'],
                          'hidden_dim': args['hidden_dim'],
                          'dim_feedforward': args['dim_feedforward'],
                          'lr_backbone': lr_backbone,
@@ -117,7 +117,7 @@ def main(args):
         print()
         exit()
 
-    train_dataloader, val_dataloader, stats, _ = load_data(dataset_dir, arti_dataset_dir, num_episodes, camera_names, batch_size_train, batch_size_val, base_crop, language_embed_dict_file, num_nodes, node_feat_dim)
+    train_dataloader, val_dataloader, stats, _ = load_data(dataset_dir, num_episodes, camera_names, batch_size_train, batch_size_val, base_crop, language_embed_dict_file, num_nodes, node_feat_dim, policy_config['num_queries'])
 
     # save dataset stats
     if not os.path.isdir(ckpt_dir):
@@ -350,12 +350,29 @@ def eval_bc(config, ckpt_name, save_episode=True):
     return success_rate, avg_return
 
 
+def move_tensors_to_cuda(data):
+    if isinstance(data, dict):
+        # 딕셔너리인 경우 재귀적으로 모든 key-value 쌍에 대해 처리
+        return {k: move_tensors_to_cuda(v) for k, v in data.items()}
+    elif isinstance(data, list):
+        # 리스트인 경우 재귀적으로 모든 요소에 대해 처리
+        return [move_tensors_to_cuda(v) for v in data]
+    elif isinstance(data, tuple):
+        # 튜플인 경우 재귀적으로 처리 (immutable 유지)
+        return tuple(move_tensors_to_cuda(v) for v in data)
+    elif isinstance(data, torch.Tensor):
+        # Tensor인 경우 .cuda() 호출
+        return data.cuda()
+    else:
+        # 다른 데이터는 그대로 반환
+        return data
+    
 def forward_pass(data, policy):
     image_data, qpos_data, action_data, is_pad, arti_info = data
     image_data, qpos_data, action_data, is_pad = image_data.cuda(), qpos_data.cuda(), action_data.cuda(), is_pad.cuda()
     
-    for k in arti_info.keys():
-        arti_info[k] = arti_info[k].cuda()
+    arti_info = move_tensors_to_cuda(arti_info)
+    
     return policy(qpos_data, image_data, action_data, is_pad, arti_info) # TODO remove None
 
 
@@ -467,6 +484,9 @@ if __name__ == '__main__':
 
     # for ACT
     parser.add_argument('--kl_weight', action='store', type=int, help='KL Weight', required=False)
+    # added in 0112 for temporal diatance loss
+    parser.add_argument('--temporal_weight', type=float, help='Temporal Weight', required=True)
+
     parser.add_argument('--chunk_size', action='store', type=int, help='chunk_size', required=False)
     parser.add_argument('--hidden_dim', action='store', type=int, help='hidden_dim', required=False)
     parser.add_argument('--dim_feedforward', action='store', type=int, help='dim_feedforward', required=False)

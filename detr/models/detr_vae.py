@@ -31,6 +31,27 @@ def get_sinusoid_encoding_table(n_position, d_hid):
 
     return torch.FloatTensor(sinusoid_table).unsqueeze(0)
 
+'''
+temporal distance network from NoMAD (ICRA2024)
+'''
+class DenseNetwork(nn.Module):
+    def __init__(self, embedding_dim):
+        super(DenseNetwork, self).__init__()
+        
+        self.embedding_dim = embedding_dim 
+        self.network = nn.Sequential(
+            nn.Linear(self.embedding_dim, self.embedding_dim//4),
+            nn.ReLU(),
+            nn.Linear(self.embedding_dim//4, self.embedding_dim//16),
+            nn.ReLU(),
+            nn.Linear(self.embedding_dim//16, 1)
+        )
+    
+    def forward(self, x):
+        x = x.reshape((-1, self.embedding_dim))
+        output = self.network(x)
+        return output
+
 
 class DETRVAE(nn.Module):
     """ This is the DETR module that performs object detection """
@@ -98,16 +119,16 @@ class DETRVAE(nn.Module):
         self.dropout2 = nn.Dropout(0.5)
         self.arti_linear2 = nn.Linear(64, 1)
         
+        self.temp_dist_net = DenseNetwork(3*hidden_dim) # stack start_arti_info & target_arti_info & proprioceptive
         
         
-        
-        self.register_buffer('pos_table', get_sinusoid_encoding_table(1+1+1+num_queries, hidden_dim)) # [CLS], qpos, a_seq
+        self.register_buffer('pos_table', get_sinusoid_encoding_table(1+1+1+1+num_queries, hidden_dim)) # [CLS], qpos, a_seq
 
         # decoder extra parameters
         self.latent_out_proj = nn.Linear(self.latent_dim, hidden_dim) # project latent sample to embedding
         
         # arti_mode에 따라 수정
-        self.additional_pos_embed = nn.Embedding(2+1, hidden_dim)
+        self.additional_pos_embed = nn.Embedding(2+1+1, hidden_dim)
         # self.additional_pos_embed = nn.Embedding(2, hidden_dim) # learned position embedding for proprio and latent
 
     def forward(self, qpos, image, env_state, actions=None, is_pad=None, arti_info: Dict=None):
@@ -124,26 +145,48 @@ class DETRVAE(nn.Module):
         '''
         arti_mode
         '''
-        node_features = arti_info['node_features']
-        _, num_nodes, _ = node_features.shape
-        edge_features = arti_info['edge_features']
-        assert edge_features.shape[1] == num_nodes * num_nodes, edge_features.shape
+        start_node_features = arti_info['start']['node_features']
+        _, num_nodes, _ = start_node_features.shape
+        start_edge_features = arti_info['start']['edge_features']
+        assert start_edge_features.shape[1] == num_nodes * num_nodes, start_edge_features.shape
         # mask_features = arti_info['mask_features'].unsqueeze(1)
         # assert mask_features.shape[1] == num_nodes, mask_features.shape
 
+        target_node_features = arti_info['target']['node_features']
+        assert target_node_features.shape[1] == num_nodes
+        target_edge_features = arti_info['target']['edge_features']
+        assert target_edge_features.shape[1] == num_nodes * num_nodes, target_edge_features.shape
+        
+        
         '''
         arti mode
         '''
-        node_input = self.node_proj(node_features)
-        edge_input = self.edge_proj(edge_features)
+        start_node_input = self.node_proj(start_node_features)
+        start_edge_input = self.edge_proj(start_edge_features)
         
-        arti_input = self.arti_relu1(torch.concat((node_input, edge_input), axis=1))
-        arti_input = arti_input.transpose(2, 1)
-        arti_input = self.arti_linear1(arti_input)
-        arti_input = self.arti_relu2(self.batchnorm2(arti_input))
-        arti_input = self.dropout2(arti_input)
-        arti_input = self.arti_linear2(arti_input) # bs 1 hidden_dim
-        arti_embed = arti_input.clone().transpose(-2, -1)
+        
+        start_arti_input = self.arti_relu1(torch.concat((start_node_input, start_edge_input), axis=1))
+        start_arti_input = start_arti_input.transpose(2, 1)
+        start_arti_input = self.arti_linear1(start_arti_input)
+        start_arti_input = self.arti_relu2(self.batchnorm2(start_arti_input))
+        start_arti_input = self.dropout2(start_arti_input)
+        start_arti_input = self.arti_linear2(start_arti_input) # bs 1 hidden_dim
+        start_arti_embed = start_arti_input.clone().transpose(-2, -1)
+        
+        
+        target_node_input = self.node_proj(target_node_features)
+        target_edge_input = self.edge_proj(target_edge_features)
+        
+        target_arti_input = self.arti_relu1(torch.concat((target_node_input, target_edge_input), axis=1))
+        target_arti_input = target_arti_input.transpose(2, 1)
+        target_arti_input = self.arti_linear1(target_arti_input)
+        target_arti_input = self.arti_relu2(self.batchnorm2(target_arti_input))
+        target_arti_input = self.dropout2(target_arti_input)
+        target_arti_input = self.arti_linear2(target_arti_input) # bs 1 hidden_dim
+        target_arti_embed = target_arti_input.clone().transpose(-2, -1)
+        
+        
+        
         
         if is_training:
             
@@ -160,12 +203,12 @@ class DETRVAE(nn.Module):
             # mask_embed = self.mask_head(mask_features)
 
             # encoder_input = torch.cat([cls_embed, node_embed, edge_embed, mask_embed, qpos_embed, action_embed], axis=1) # (bs, seq+1+arti_dim, hidden_dim)
-            encoder_input = torch.cat([cls_embed, arti_embed, qpos_embed, action_embed], axis=1)  # (bs, seq+1+1, hidden_dim)
+            encoder_input = torch.cat([cls_embed, start_arti_embed, target_arti_embed, qpos_embed, action_embed], axis=1)  # (bs, seq+1+1+1, hidden_dim)
             encoder_input = encoder_input.permute(1, 0, 2) # (seq+1+arti_dim, bs, hidden_dim)
             # do not mask cls token
             cls_joint_is_pad = torch.full((bs, 2), False).to(qpos.device) # False: not a padding
             # arti_joint_is_pad = torch.full((bs, arti_dim), False).to(qpos.device)
-            arti_joint_is_pad = torch.full((bs, 1), False).to(qpos.device)
+            arti_joint_is_pad = torch.full((bs, 2), False).to(qpos.device)
 
             is_pad = torch.cat([cls_joint_is_pad, arti_joint_is_pad, is_pad], axis=1)  # (bs, seq+1+arti_dim)
             # obtain position embedding
@@ -186,7 +229,9 @@ class DETRVAE(nn.Module):
             latent_input = self.latent_out_proj(latent_sample)
 
         
-        arti_input = arti_input.squeeze(-1) # bs hidden_dim
+        start_arti_input = start_arti_input.squeeze(-1) # bs hidden_dim
+        target_arti_input = target_arti_input.squeeze(-1)
+
 
         if self.backbones is not None:
             # Image observation features and position embeddings
@@ -200,10 +245,14 @@ class DETRVAE(nn.Module):
                 all_cam_pos.append(pos)
             # proprioception features
             proprio_input = self.input_proj_robot_state(qpos) # bs hidden_dim
+            
+            # temporal dist
+            temporal_embed = torch.concatenate((start_arti_input, target_arti_input, proprio_input), axis=-1)
+            pred_temporal_dist = self.temp_dist_net(temporal_embed)
             # fold camera dimension into width dimension
             src = torch.cat(all_cam_features, axis=3)
             pos = torch.cat(all_cam_pos, axis=3)
-            hs = self.transformer(src, None, self.query_embed.weight, pos, latent_input, proprio_input, arti_input, self.additional_pos_embed.weight)[0]
+            hs = self.transformer(src, None, self.query_embed.weight, pos, latent_input, proprio_input, (start_arti_input, target_arti_input), self.additional_pos_embed.weight)[0]
         else:
             raise NotImplementedError
             qpos = self.input_proj_robot_state(qpos)
@@ -212,7 +261,7 @@ class DETRVAE(nn.Module):
             hs = self.transformer(transformer_input, None, self.query_embed.weight, self.pos.weight)[0]
         a_hat = self.action_head(hs)
         is_pad_hat = self.is_pad_head(hs)
-        return a_hat, is_pad_hat, [mu, logvar]
+        return a_hat, is_pad_hat, [mu, logvar], pred_temporal_dist
 
 
 

@@ -61,6 +61,8 @@ def get_args_parser():
     parser.add_argument('--seed', action='store', type=int, help='seed', required=True)
     parser.add_argument('--num_epochs', action='store', type=int, help='num_epochs', required=True)
     parser.add_argument('--kl_weight', action='store', type=int, help='KL Weight', required=False)
+    parser.add_argument('--temporal_weight', type=float, help='Temporal Weight', required=False)
+    
     parser.add_argument('--chunk_size', action='store', type=int, help='chunk_size', required=False)
     parser.add_argument('--temporal_agg', action='store_true')
 
@@ -70,9 +72,9 @@ def get_args_parser():
 def build_ACT_model_and_optimizer(args_override):
     parser = argparse.ArgumentParser('DETR training and evaluation script', parents=[get_args_parser()])
     args = parser.parse_args()
-
     for k, v in args_override.items():
         setattr(args, k, v)
+
 
     model = build_ACT_model(args)
     model.cuda()

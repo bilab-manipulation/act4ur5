@@ -46,7 +46,7 @@ class Transformer(nn.Module):
             if p.dim() > 1:
                 nn.init.xavier_uniform_(p)
 
-    def forward(self, src, mask, query_embed, pos_embed, latent_input=None, proprio_input=None, arti_input=None, additional_pos_embed=None):
+    def forward(self, src, mask, query_embed, pos_embed, latent_input=None, proprio_input=None, arti_input:tuple =None, additional_pos_embed=None):
         # TODO flatten only when input has H and W
         if len(src.shape) == 4: # has H and W
             # flatten NxCxHxW to HWxNxC
@@ -58,7 +58,7 @@ class Transformer(nn.Module):
 
             additional_pos_embed = additional_pos_embed.unsqueeze(1).repeat(1, bs, 1) # seq, bs, dim
             pos_embed = torch.cat([additional_pos_embed, pos_embed], axis=0)
-            addition_input = torch.stack([latent_input, proprio_input, arti_input], axis=0)
+            addition_input = torch.stack([latent_input, proprio_input, arti_input[0], arti_input[1]], axis=0)
             src = torch.cat([addition_input, src], axis=0)
         else:
             assert len(src.shape) == 3

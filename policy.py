@@ -13,6 +13,7 @@ class ACTPolicy(nn.Module):
         self.model = model # CVAE decoder
         self.optimizer = optimizer
         self.kl_weight = args_override['kl_weight']
+        self.temporal_weight = args_override['temporal_weight']
         print(f'KL Weight {self.kl_weight}')
 
     def __call__(self, qpos, image, actions=None, is_pad=None, arti_info=None):
@@ -21,20 +22,22 @@ class ACTPolicy(nn.Module):
                                          std=[0.229, 0.224, 0.225])
         image = normalize(image)
         if actions is not None: # training time
+            # 0108 수정사항 확인
+            assert actions.shape[1] == self.model.num_queries and is_pad.shape[1] == self.model.num_queries 
             actions = actions[:, :self.model.num_queries]
             is_pad = is_pad[:, :self.model.num_queries]
-
-            a_hat, is_pad_hat, (mu, logvar) = self.model(qpos, image, env_state, actions, is_pad, arti_info)
+            a_hat, is_pad_hat, (mu, logvar), pred_temporal_dist = self.model(qpos, image, env_state, actions, is_pad, arti_info)
             total_kld, dim_wise_kld, mean_kld = kl_divergence(mu, logvar)
             loss_dict = dict()
             all_l1 = F.l1_loss(actions, a_hat, reduction='none')
             l1 = (all_l1 * ~is_pad.unsqueeze(-1)).mean()
             loss_dict['l1'] = l1
             loss_dict['kl'] = total_kld[0]
-            loss_dict['loss'] = loss_dict['l1'] + loss_dict['kl'] * self.kl_weight
+            loss_dict['temporal'] = F.mse_loss(pred_temporal_dist.squeeze(-1), arti_info['temporal'].float())
+            loss_dict['loss'] = loss_dict['l1'] + loss_dict['kl'] * self.kl_weight + loss_dict['temporal'] * self.temporal_weight
             return loss_dict
         else: # inference time
-            a_hat, _, (_, _) = self.model(qpos, image, env_state, arti_info=arti_info) # no action, sample from prior
+            a_hat, _, (_, _), _ = self.model(qpos, image, env_state, arti_info=arti_info) # no action, sample from prior
             return a_hat
 
     def configure_optimizers(self):

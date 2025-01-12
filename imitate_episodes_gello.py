@@ -223,6 +223,7 @@ def main(args):
         policy_config = {'lr': args['lr'],
                          'num_queries': args['chunk_size'],
                          'kl_weight': args['kl_weight'],
+                         'temporal_weight': args['temporal_weight'],
                          'hidden_dim': args['hidden_dim'],
                          'dim_feedforward': args['dim_feedforward'],
                          'lr_backbone': lr_backbone,
@@ -336,6 +337,7 @@ def get_image(camera_names, base_crop, obs):
     curr_image = np.stack(curr_images, axis=0)
     curr_image = torch.from_numpy(curr_image / 255.0).float().cuda().unsqueeze(0)
     return curr_image
+
 
 
 def eval_bc(config, ckpt_name, base_crop, scan_cam, save_episode=True):
@@ -568,12 +570,29 @@ def eval_bc(config, ckpt_name, base_crop, scan_cam, save_episode=True):
     return success_rate, avg_return
 
 
+def move_tensors_to_cuda(data):
+    if isinstance(data, dict):
+        # 딕셔너리인 경우 재귀적으로 모든 key-value 쌍에 대해 처리
+        return {k: move_tensors_to_cuda(v) for k, v in data.items()}
+    elif isinstance(data, list):
+        # 리스트인 경우 재귀적으로 모든 요소에 대해 처리
+        return [move_tensors_to_cuda(v) for v in data]
+    elif isinstance(data, tuple):
+        # 튜플인 경우 재귀적으로 처리 (immutable 유지)
+        return tuple(move_tensors_to_cuda(v) for v in data)
+    elif isinstance(data, torch.Tensor):
+        # Tensor인 경우 .cuda() 호출
+        return data.cuda()
+    else:
+        # 다른 데이터는 그대로 반환
+        return data
+    
+
 def forward_pass(data, policy):
     image_data, qpos_data, action_data, is_pad, arti_info = data
     image_data, qpos_data, action_data, is_pad = image_data.cuda(), qpos_data.cuda(), action_data.cuda(), is_pad.cuda()
     
-    for k in arti_info.keys():
-        arti_info[k] = arti_info[k].cuda()
+    arti_info = move_tensors_to_cuda(arti_info)
         
     return policy(qpos_data, image_data, action_data, is_pad, arti_info) # TODO remove None
 
@@ -686,6 +705,9 @@ if __name__ == '__main__':
 
     # for ACT
     parser.add_argument('--kl_weight', action='store', type=int, help='KL Weight', required=False)
+    # added in 0112 for temporal diatance loss
+    parser.add_argument('--temporal_weight', type=float, help='Temporal Weight', required=True)
+
     parser.add_argument('--chunk_size', action='store', type=int, help='chunk_size', required=False)
     parser.add_argument('--hidden_dim', action='store', type=int, help='hidden_dim', required=False)
     parser.add_argument('--dim_feedforward', action='store', type=int, help='dim_feedforward', required=False)
