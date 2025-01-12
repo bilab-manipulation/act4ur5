@@ -1,6 +1,19 @@
 import torch
 import numpy as np
 import os
+
+import time
+
+import sys
+import socket
+
+# Set up socket parameters
+HOST = '147.46.215.151'  # Server IP address
+PORT = 9999  # Port for the server connection
+import cv2
+import open3d as o3d
+
+
 import pickle
 import argparse
 import matplotlib.pyplot as plt
@@ -21,10 +34,27 @@ from sim_env import BOX_POSE
 import IPython
 e = IPython.embed
 
+def recvall(sock):
+    datalen = int(sock.recv(10).decode("utf-8"))
+    print("[jslee] received data length: ", datalen)
+    fragments = []
+    while datalen:
+        chunk = sock.recv(4096)
+        print("[jslee] received chunk length: ", len(chunk))
+        fragments.append(chunk)
+        datalen -= len(chunk)
+    return b''.join(fragments)
+
 def main(args):
     set_seed(1)
     # command line parameters
     is_eval = args['eval']
+    
+    if is_eval:
+        import rospy
+        rospy.init_node('arti', anonymous=True)
+    
+    
     ckpt_dir = args['ckpt_dir']
     policy_class = args['policy_class']
     onscreen_render = args['onscreen_render']
@@ -58,6 +88,121 @@ def main(args):
     # fixed parameters
     state_dim = task_config['state_dim']
     print("STATE DIM", state_dim)
+    
+    if task_config['touch_feedback']:
+        from touch import FeedbackLoop
+        # ros node init for touch senor project alchemist
+
+        print("=======TOUCH FEEDBACK ON!=========")
+
+
+    if is_eval:
+        if os.path.isdir(args['gello_dir']):
+            sys.path.append(args['gello_dir'])
+            from gello.env import RobotEnv # type: ignore
+            from gello.zmq_core.robot_node import ZMQClientRobot # type: ignore
+            from gello.cameras.realsense_camera import LogitechCamera, RealSenseCamera, RealSenseCameraRos, get_device_ids # type: ignore
+            arti_check = False # 1208 확인용
+            if len(camera_names) >= 2:
+                if state_dim == 14:
+                    ## 먼저 realsense수 체크
+                    ids = get_device_ids()
+                    camera_clients = {}
+                    for id in ids:
+                        if id == '033422070567': #left camera
+                            camera_clients["wrist_left"] = RealSenseCamera(device_id=id)
+                        elif id == '021222071327':
+                            camera_clients["wrist_right"] = RealSenseCamera(device_id=id)
+                            
+                    camera_clients["base"] = LogitechCamera(device_id='/dev/frontcam')
+                else:
+                    print("DUAL CAMERA!!!")
+                    camera_clients = {
+                        # you can optionally add camera nodes here for imitation learning purposes
+                        # "wrist": RealSenseCamera(),
+                        "base": LogitechCamera(device_id='/dev/frontcam'),
+                        
+                    }
+                    arti_check = True
+                    camera_clients['arti'] = RealSenseCameraRos(topic='camera')
+                print("FINISH")
+            else:
+                if state_dim == 14:
+                    camera_clients = {}
+                    ids = get_device_ids()
+                    assert len(ids) <= 1, f"Only one realsense camera is connected:, {ids}"
+                    camera_clients["wrist"] = RealSenseCamera()
+                    camera_clients["base"] = LogitechCamera(device_id='/dev/frontcam')
+                else:
+                    camera_clients = {
+                        # you can optionally add camera nodes here for imitation learning purposes
+                        # "wrist": ZMQClientCamera(port=args.wrist_camera_port, host=args.hostname),
+                        # "base": ZMQClientCamera(port=args.base_camera_port, host=args.hostname),
+                        "wrist": LogitechCamera(device_id='/dev/frontcam')
+                    }
+            robot_client = ZMQClientRobot(port=6001, host="127.0.0.1")
+            env = RobotEnv(robot_client, control_rate_hz=50, camera_dict=camera_clients)
+            assert arti_check, "arti check mode for test.... TEMPORARY"
+            if state_dim == 14:
+                # dynamixel control box port map (to distinguish left and right gello)
+                
+                # 1119 세팅에 맞게 변경
+                # right = "/dev/serial/by-id/usb-FTDI_USB__-__Serial_Converter_FT94EKG0-if00-port0"
+                # left = "/dev/serial/by-id/usb-FTDI_USB__-__Serial_Converter_FT9BTGRS-if00-port0"
+                # left_agent = GelloAgent(port=left)
+                # right_agent = GelloAgent(port=right)
+                # agent = BimanualAgent(left_agent, right_agent)
+                # print("gellos,")
+
+                ## 1119 세팅!! TODO 바꿔야함
+                reset_joints_left = np.deg2rad([149, -58, -134, -77, 87, -45, 0])
+                reset_joints_right = np.deg2rad([-143, -112, 127, -104, -93, 45, 0])
+                reset_joints = np.concatenate([reset_joints_left, reset_joints_right])
+                curr_joints = env.get_obs()["joint_positions"]
+                max_delta = (np.abs(curr_joints - reset_joints)).max()
+                steps = min(int(max_delta / 0.01), 100)
+
+                for jnt in np.linspace(curr_joints, reset_joints, steps):
+                    env.step(jnt)
+            else:
+                it = 1 # right robot
+                if it == 0:
+                    reset_joints = np.deg2rad(
+                        [149, -58, -134, -77, 87, -45, 0], # left
+                        # [-180, -120, 135, -90, -90, -90, 0],
+                        # [-90, -90, 90, -90, -90, 0, 0]
+                        # [0, -90, 90, -90, -90, 0, 0]
+                    )  # Change this to your own reset joints
+                else:
+                    reset_joints = np.deg2rad(
+                        # [180, -60, -135, -90, 90, 90, 0], # left
+                        [-143, -112, 127, -104, -93, 45, 0], #right
+                        # [-90, -90, 90, -90, -90, 0, 0]
+                        # [0, -90, 90, -90, -90, 0, 0]
+                    )
+                    
+                    # agent = GelloAgent(port=gello_port, start_joints=args.start_joints)
+                    curr_joints = env.get_obs()["joint_positions"]
+                    if reset_joints.shape == curr_joints.shape:
+                        max_delta = (np.abs(curr_joints - reset_joints)).max()
+                        steps = min(int(max_delta / 0.01), 100)
+
+                        for jnt in np.linspace(curr_joints, reset_joints, steps):
+                            env.step(jnt)
+                            time.sleep(0.001)
+            
+            # going to start position
+            print("Going to start position")
+            scan_cam = camera_clients['arti']
+
+            time.sleep(1)
+        else:
+            print("GELLO MODULE DIRECTORY WRONG")
+            exit(1)
+    else:
+        env = None
+
+
     lr_backbone = 1e-5
     backbone = 'resnet18'
     if policy_class == 'ACT':
@@ -102,14 +247,16 @@ def main(args):
         'seed': args['seed'],
         'temporal_agg': args['temporal_agg'],
         'camera_names': camera_names,
-        'real_robot': not is_sim
+        'real_robot': not is_sim,
+        'gello_env': env,
+        'touch_feedback': task_config['touch_feedback'],
     }
 
     if is_eval:
-        ckpt_names = [f'policy_best.ckpt']
+        ckpt_names = task_config['ckpt_names'] # ckpt_names = [f'policy_best.ckpt']
         results = []
         for ckpt_name in ckpt_names:
-            success_rate, avg_return = eval_bc(config, ckpt_name, save_episode=True)
+            success_rate, avg_return = eval_bc(config, ckpt_name, base_crop, scan_cam, save_episode=True)
             results.append([ckpt_name, success_rate, avg_return])
 
         for ckpt_name, success_rate, avg_return in results:
@@ -154,18 +301,33 @@ def make_optimizer(policy_class, policy):
         raise NotImplementedError
     return optimizer
 
-
-def get_image(ts, camera_names):
+def get_image(camera_names, base_crop, obs):
     curr_images = []
-    for cam_name in camera_names:
-        curr_image = rearrange(ts.observation['images'][cam_name], 'h w c -> c h w')
+    # 0705, For this time we just use wrist_rgb so...
+    for camera_name in camera_names:
+        curr_image = rearrange(obs[f'{camera_name}_rgb'], 'h w c -> c h w')
+        if base_crop and camera_name == 'base':
+            assert curr_image.shape == (3, 480, 640)
+            curr_image = curr_image[:, 96:, :-40].transpose(1, 2, 0)
+            curr_image = cv2.resize(curr_image, (640, 480), interpolation=cv2.INTER_LANCZOS4)
+        if (curr_image.shape == (480, 640, 3)):
+            curr_image = curr_image.transpose(2, 0, 1)
+        # print("curr image", curr_image.shape, "camera name", camera_name)
+
+        assert curr_image.shape == (3, 480, 640)
+             
+
         curr_images.append(curr_image)
+    # for cam_name in camera_names:
+    #     curr_image = rearrange(ts.observation['images'][cam_name], 'h w c -> c h w')
+    #     curr_images.append(curr_image)
     curr_image = np.stack(curr_images, axis=0)
     curr_image = torch.from_numpy(curr_image / 255.0).float().cuda().unsqueeze(0)
     return curr_image
 
 
-def eval_bc(config, ckpt_name, save_episode=True):
+
+def eval_bc(config, ckpt_name, base_crop, scan_cam, save_episode=True):
     set_seed(1000)
     ckpt_dir = config['ckpt_dir']
     state_dim = config['state_dim']
@@ -178,13 +340,25 @@ def eval_bc(config, ckpt_name, save_episode=True):
     task_name = config['task_name']
     temporal_agg = config['temporal_agg']
     onscreen_cam = 'angle'
+    env = config['gello_env']
+    feedback_on = config['touch_feedback']
+    
+    
+    if feedback_on:
+        rospy.init_node('gripper_srbl', anonymous=True)
+        gripper_feedback = FeedbackLoop()
+    
+    # for arti mode
+    # arti_model = OneShotInference(CONFIG_PATH)
+    
 
     # load policy and stats
     ckpt_path = os.path.join(ckpt_dir, ckpt_name)
     policy = make_policy(policy_class, policy_config)
-    loading_status = policy.load_state_dict(torch.load(ckpt_path))
+    kk = torch.load(ckpt_path, map_location='cpu', weights_only=True)
+    loading_status = policy.load_state_dict(kk)    
     print(loading_status)
-    policy.cuda()
+    policy = policy.cuda()
     policy.eval()
     print(f'Loaded: {ckpt_path}')
     stats_path = os.path.join(ckpt_dir, f'dataset_stats.pkl')
@@ -193,19 +367,15 @@ def eval_bc(config, ckpt_name, save_episode=True):
 
     pre_process = lambda s_qpos: (s_qpos - stats['qpos_mean']) / stats['qpos_std']
     post_process = lambda a: a * stats['action_std'] + stats['action_mean']
-    
-    
-    '''
-    arti info
-    '''
 
     # load environment
     if real_robot:
-        from aloha_scripts.robot_utils import move_grippers # requires aloha
-        from aloha_scripts.real_env import make_real_env # requires aloha
-        env = make_real_env(init_node=True)
+        # from aloha_scripts.robot_utils import move_grippers # requires aloha
+        # from aloha_scripts.real_env import make_real_env # requires aloha
+        # env = make_real_env(init_node=True)
         env_max_reward = 0
     else:
+        raise NotImplementedError
         from sim_env import make_sim_env
         env = make_sim_env(task_name)
         env_max_reward = env.task.max_reward
@@ -228,60 +398,87 @@ def eval_bc(config, ckpt_name, save_episode=True):
         elif 'sim_insertion' in task_name:
             BOX_POSE[0] = np.concatenate(sample_insertion_pose()) # used in sim reset
 
-        ts = env.reset()
+        # ts = env.reset()
 
-        ### onscreen render
-        if onscreen_render:
-            ax = plt.subplot()
-            plt_img = ax.imshow(env._physics.render(height=480, width=640, camera_id=onscreen_cam))
-            plt.ion()
+        # ### onscreen render
+        # if onscreen_render:
+        #     ax = plt.subplot()
+        #     plt_img = ax.imshow(env._physics.render(height=480, width=640, camera_id=onscreen_cam))
+        #     plt.ion()
 
         ### evaluation loop
         if temporal_agg:
             all_time_actions = torch.zeros([max_timesteps, max_timesteps+num_queries, state_dim]).cuda()
 
         qpos_history = torch.zeros((1, max_timesteps, state_dim)).cuda()
-        image_list = [] # for visualization
+        # image_list = [] # for visualization
         qpos_list = []
         target_qpos_list = []
         rewards = []
+        
+        '''
+        NOTICE: arti info는 에피소드랑 한번만 들어가도록 한다.
+        추후에는 dynamic하게 사용할 수도 있는듯
+        '''
+        arti_pc, arti_rgb = scan_cam.get_pc()
+        arti_rgb = np.asarray(arti_rgb)
+        
+        arti_pc = torch.tensor(arti_pc)
+        arti_rgb = torch.tensor(arti_rgb)
+        
+        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        s.connect((HOST, PORT))
+        print(f"Connected to server at {HOST}:{PORT}")
+        
+        try:
+            data = pickle.dumps((arti_pc, arti_rgb))
+            datalen = str(len(data)).zfill(10)
+            
+            # 데이터 길이를 먼저 전송
+            s.send(datalen.encode('utf-8'))
+            s.sendall(data)  # 실제 데이터 전송
+            print("SENDING DATA:", datalen)
+            # 서버로부터 액션 받기
+            arti_info = recvall(s)
+            arti_info = pickle.loads(arti_info)
+            print("received arti info")
+        finally:
+            s.close()
+
+
         with torch.inference_mode():
             for t in range(max_timesteps):
+                tic = time.time()
+
                 ### update onscreen render and wait for DT
                 if onscreen_render:
-                    image = env._physics.render(height=480, width=640, camera_id=onscreen_cam)
-                    plt_img.set_data(image)
-                    plt.pause(DT)
+                    # image = env._physics.render(height=480, width=640, camera_id=onscreen_cam)
+                    # plt_img.set_data(image)
+                    # plt.pause(DT)
+                    pass
 
                 ### process previous timestep to get qpos and image_list
-                obs = ts.observation
-                if 'images' in obs:
-                    image_list.append(obs['images'])
-                else:
-                    image_list.append({'main': obs['image']})
-                qpos_numpy = np.array(obs['qpos'])
+                obs = env.get_obs()
+
+                # for camera_name in camera_names:
+                #     camera_name += '_rgb'
+                #     image = obs[camera_name]
+                #     assert image.shape == (480, 640, 3), f"for checking 1123, {image.shape}"
+
+                # if 'images' in obs:
+                #     image_list.append(obs['images'])
+                # else:
+                #     image_list.append({'main': obs['image']})
+                qpos_numpy = np.array(obs['joint_positions'])
                 qpos = pre_process(qpos_numpy)
                 qpos = torch.from_numpy(qpos).float().cuda().unsqueeze(0)
                 qpos_history[:, t] = qpos
-                curr_image = get_image(ts, camera_names)
+                curr_image = get_image(camera_names, base_crop, obs)
 
-                
-                
-                '''
-                TODO:여기서 arti_info만들기
-                '''
-                arti_info = None
-                
-                
-                
-                '''
-                --------
-                '''
-                
-                
                 ### query policy
                 if config['policy_class'] == "ACT":
                     if t % query_frequency == 0:
+                        # TODO: arti_info도 들어가야함
                         
                         all_actions = policy(qpos, curr_image, arti_info=arti_info)
                     if temporal_agg:
@@ -305,18 +502,27 @@ def eval_bc(config, ckpt_name, save_episode=True):
                 raw_action = raw_action.squeeze(0).cpu().numpy()
                 action = post_process(raw_action)
                 target_qpos = action
-
+                
+                if feedback_on:
+                    assert len(target_qpos) == 7, "target qpos should be 7 from now on... need to be changed TODO"
+                    original_gripper_pos = target_qpos[-1]
+                    # REVISED BY TOUCH SENSOR TEAM
+                    print("GRIPPER POS ORIGINAL", original_gripper_pos)
+                    new_gripper_pos = gripper_feedback.feedback(original_gripper_pos)
+                    print("NEW GRIPPER POS", new_gripper_pos)
+                    target_qpos[-1] = new_gripper_pos
+                print("target qpos", target_qpos)
                 ### step the environment
-                ts = env.step(target_qpos)
+                env.step(target_qpos) # ts = env.step(target_qpos)
 
                 ### for visualization
                 qpos_list.append(qpos_numpy)
                 target_qpos_list.append(target_qpos)
-                rewards.append(ts.reward)
-
-            plt.close()
+                rewards.append(0)
+                print("ELAPSED TIME", time.time() - tic)
+            # plt.close()
         if real_robot:
-            move_grippers([env.puppet_bot_left, env.puppet_bot_right], [PUPPET_GRIPPER_JOINT_OPEN] * 2, move_time=0.5)  # open
+            # move_grippers([env.puppet_bot_left, env.puppet_bot_right], [PUPPET_GRIPPER_JOINT_OPEN] * 2, move_time=0.5)  # open
             pass
 
         rewards = np.array(rewards)
@@ -327,7 +533,8 @@ def eval_bc(config, ckpt_name, save_episode=True):
         print(f'Rollout {rollout_id}\n{episode_return=}, {episode_highest_reward=}, {env_max_reward=}, Success: {episode_highest_reward==env_max_reward}')
 
         if save_episode:
-            save_videos(image_list, DT, video_path=os.path.join(ckpt_dir, f'video{rollout_id}.mp4'))
+            pass
+            # save_videos(image_list, DT, video_path=os.path.join(ckpt_dir, f'video{rollout_id}.mp4'))
 
     success_rate = np.mean(np.array(highest_rewards) == env_max_reward)
     avg_return = np.mean(episode_returns)
@@ -491,5 +698,9 @@ if __name__ == '__main__':
     parser.add_argument('--hidden_dim', action='store', type=int, help='hidden_dim', required=False)
     parser.add_argument('--dim_feedforward', action='store', type=int, help='dim_feedforward', required=False)
     parser.add_argument('--temporal_agg', action='store_true')
+    
+    # for gello
+    parser.add_argument('--gello_dir', action='store', default='../', type=str)
+
     
     main(vars(parser.parse_args()))
