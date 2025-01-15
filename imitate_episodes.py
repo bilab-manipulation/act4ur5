@@ -427,9 +427,9 @@ def eval_bc(config, ckpt_name, base_crop, scan_cam, save_episode=True):
         
         
         
-        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        s.connect((HOST, PORT))
-        print(f"Connected to server at {HOST}:{PORT}")
+        # s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        # s.connect((HOST, PORT))
+        # print(f"Connected to server at {HOST}:{PORT}")
         
         target_arti_info = {}
         lang_split = np.load('part_embed_list_1212_768.pkl', allow_pickle=True)
@@ -461,7 +461,7 @@ def eval_bc(config, ckpt_name, base_crop, scan_cam, save_episode=True):
             raise NotImplementedError
 
 
-        
+        total_arti_info = {}
         with torch.inference_mode():
             for t in range(max_timesteps):
                 tic = time.time()
@@ -470,30 +470,33 @@ def eval_bc(config, ckpt_name, base_crop, scan_cam, save_episode=True):
                 ### process previous timestep to get qpos and image_list
                 obs = env.get_obs()
                 
-                if t % 10 == 0:
-                    try:
-                        total_arti_info = {}
-                        arti_pc, arti_rgb = scan_cam.get_pc()
-                        arti_rgb = np.asarray(arti_rgb)
+                total_arti_info['target'] = target_arti_info
+                total_arti_info['temporal'] = 0.0 # dummy
+                
+                # if t % 10 == 0:
+                #     try:
+                #         total_arti_info = {}
+                #         arti_pc, arti_rgb = scan_cam.get_pc()
+                #         arti_rgb = np.asarray(arti_rgb)
                         
-                        arti_pc = torch.tensor(arti_pc)
-                        arti_rgb = torch.tensor(arti_rgb)
-                        data = pickle.dumps((arti_pc, arti_rgb))
-                        datalen = str(len(data)).zfill(10)
+                #         arti_pc = torch.tensor(arti_pc)
+                #         arti_rgb = torch.tensor(arti_rgb)
+                #         data = pickle.dumps((arti_pc, arti_rgb))
+                #         datalen = str(len(data)).zfill(10)
                         
-                        # 데이터 길이를 먼저 전송
-                        s.send(datalen.encode('utf-8'))
-                        s.sendall(data)  # 실제 데이터 전송
-                        print("SENDING DATA:", datalen)
-                        # 서버로부터 액션 받기
-                        arti_info = recvall(s)
-                        arti_info = pickle.loads(arti_info)
-                        total_arti_info['start'] = arti_info
-                        total_arti_info['target'] = target_arti_info
-                        total_arti_info['temporal'] = 0.0 # dummy
-                        print("received arti info")
-                    except:
-                        print("ARTI model FAILED!!!")
+                #         # 데이터 길이를 먼저 전송
+                #         s.send(datalen.encode('utf-8'))
+                #         s.sendall(data)  # 실제 데이터 전송
+                #         print("SENDING DATA:", datalen)
+                #         # 서버로부터 액션 받기
+                #         arti_info = recvall(s)
+                #         arti_info = pickle.loads(arti_info)
+                #         total_arti_info['start'] = arti_info
+                #         total_arti_info['target'] = target_arti_info
+                #         total_arti_info['temporal'] = 0.0 # dummy
+                #         print("received arti info")
+                #     except:
+                #         print("ARTI model FAILED!!!")
 
 
                 # for camera_name in camera_names:
@@ -561,8 +564,8 @@ def eval_bc(config, ckpt_name, base_crop, scan_cam, save_episode=True):
             # move_grippers([env.puppet_bot_left, env.puppet_bot_right], [PUPPET_GRIPPER_JOINT_OPEN] * 2, move_time=0.5)  # open
             pass
         
-        print("CLOSE socket!")
-        s.close()
+        # print("CLOSE socket!")
+        # s.close()
 
         rewards = np.array(rewards)
         episode_return = np.sum(rewards[rewards!=None])
