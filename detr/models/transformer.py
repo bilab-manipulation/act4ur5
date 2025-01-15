@@ -60,11 +60,10 @@ class Transformer(nn.Module):
             pos_embed = torch.cat([additional_pos_embed, pos_embed], axis=0)
             addition_input = torch.stack([latent_input, proprio_input], axis=0)
 
-            start_arti_input, target_arti_input = arti_input
-            start_arti_input = start_arti_input.permute(1, 0, 2)
+            target_arti_input = arti_input
             target_arti_input = target_arti_input.permute(1, 0, 2) 
             
-            src = torch.cat([addition_input, start_arti_input, target_arti_input, src], axis=0)
+            src = torch.cat([addition_input, target_arti_input, src], axis=0)
         else:
             assert len(src.shape) == 3
             # flatten NxHWxC to HWxNxC
