@@ -169,8 +169,6 @@ class EpisodicDataset(torch.utils.data.Dataset):
             qpos = root['/observations/qpos'][start_ts]
             qvel = root['/observations/qvel'][start_ts]
             # start_arti_info = create_arti_info(start_ts, joint_infos, instance_pose_jsons)
-            start_arti_info = arti_infos[start_ts]
-            input_arti_info['start'] = start_arti_info
             # assert _e_len == len(joint_infos) and _e_len == len(instance_pose_jsons)
             # target_arti_info = create_arti_info(_e_len-1, joint_infos, instance_pose_jsons)
             target_arti_info = arti_infos[_e_len-1]

@@ -35,11 +35,14 @@ def get_sinusoid_encoding_table(n_position, d_hid):
 temporal distance network from NoMAD (ICRA2024)
 '''
 class DenseNetwork(nn.Module):
-    def __init__(self, embedding_dim):
+    def __init__(self, embedding_dim, channel_dim):
         super(DenseNetwork, self).__init__()
-        
-        self.embedding_dim = embedding_dim 
+        self.channel_dim = channel_dim
+        self.embedding_dim = embedding_dim
         self.network = nn.Sequential(
+            nn.Conv1d(self.channel_dim, self.channel_dim // 4, 3, padding=1),
+            nn.ReLU(),
+            nn.Conv1d(self.channel_dim // 4, 1, 3, padding=1),
             nn.Linear(self.embedding_dim, self.embedding_dim//4),
             nn.ReLU(),
             nn.Linear(self.embedding_dim//4, self.embedding_dim//16),
@@ -48,14 +51,14 @@ class DenseNetwork(nn.Module):
         )
     
     def forward(self, x):
-        x = x.reshape((-1, self.embedding_dim))
+        # x = x.reshape((-1, self.embedding_dim))
         output = self.network(x)
-        return output
+        return output.squeeze(1)
 
 
 class DETRVAE(nn.Module):
     """ This is the DETR module that performs object detection """
-    def __init__(self, backbones, transformer, encoder, state_dim, num_queries, camera_names, node_feat_dim, edge_feat_dim, image_shape: Tuple, num_nodes):
+    def __init__(self, backbones, transformer, encoder, state_dim, num_queries, camera_names, node_feat_dim, edge_feat_dim, image_shape: Tuple, num_nodes, token_per_node: int):
         """ Initializes the model.
         Parameters:
             backbones: torch module of the backbone to be used. See backbone.py
@@ -104,34 +107,65 @@ class DETRVAE(nn.Module):
         self.encoder_action_proj = nn.Linear(state_dim, hidden_dim) # project action to embedding
         self.encoder_joint_proj = nn.Linear(state_dim, hidden_dim)  # project qpos to embedding
         self.latent_proj = nn.Linear(hidden_dim, self.latent_dim*2) # project hidden state to latent std, var
+        self.num_nodes = num_nodes
         
         
-        self.arti_dim = num_nodes + num_nodes * num_nodes
+        self.edge_feat_dim = edge_feat_dim
         
         # arti proj for encoder
         self.node_proj = nn.Linear(node_feat_dim, hidden_dim)
-        self.edge_proj = nn.Linear(edge_feat_dim, hidden_dim)
-        # self.mask_proj = nn.Linear(H*W, hidden_dim)
-        self.arti_relu1 = nn.ReLU()
-        self.arti_linear1 = nn.Linear(self.arti_dim, 64)
-        self.batchnorm2 = nn.BatchNorm1d(hidden_dim)
-        self.arti_relu2 = nn.ReLU()
-        self.dropout2 = nn.Dropout(0.5)
-        self.arti_linear2 = nn.Linear(64, 1)
+        self.edge_proj = nn.Linear(num_nodes*(edge_feat_dim-1), 2*hidden_dim)
         
-        self.temp_dist_net = DenseNetwork(3*hidden_dim) # stack start_arti_info & target_arti_info & proprioceptive
+         
+        '''
+        tokenize layer for cvae
+        '''
+        self.cvae_arti_conv1 = nn.Conv1d(num_nodes, 3*num_nodes, 3, padding=1)
+        self.cvae_batchnorm1 = nn.BatchNorm1d(3*num_nodes)
+        self.cvae_relu1 = nn.ReLU()
+        self.cvae_dropout1 = nn.Dropout(0.5)
+        
+        self.cvae_arti_conv2 = nn.Conv1d(3*num_nodes, num_nodes, 3, padding=1)
+        self.cvae_batchnorm2 = nn.BatchNorm1d(num_nodes) 
+        self.cvae_relu2 = nn.ReLU()
+        self.cvae_dropout2 = nn.Dropout(0.5)
+        self.cvae_linear = nn.Linear(3*hidden_dim, hidden_dim)
         
         
-        self.register_buffer('pos_table', get_sinusoid_encoding_table(1+1+1+1+num_queries, hidden_dim)) # [CLS], qpos, a_seq
+        
+        '''
+        tokenize layer for transformer encoder
+        '''
+        self.encoder_arti_conv1 = nn.Conv1d(num_nodes, 3*num_nodes, 3, padding=1)
+        self.encoder_batchnorm1 = nn.BatchNorm1d(3*num_nodes)
+        self.encoder_relu1 = nn.ReLU()
+        self.encoder_dropout1 = nn.Dropout(0.5)
+        
+        self.encoder_arti_conv2 = nn.Conv1d(3*num_nodes, 9*num_nodes, 3, padding=1)
+        self.encoder_batchnorm2 = nn.BatchNorm1d(9*num_nodes)
+        self.encoder_relu2 = nn.ReLU()
+        self.encoder_dropout2 = nn.Dropout(0.5)
+        
+        self.encoder_arti_conv3 = nn.Conv1d(9*num_nodes, token_per_node*num_nodes, 3, padding=1)
+        self.encoder_batchnorm3 = nn.BatchNorm1d(token_per_node*num_nodes) 
+        self.encoder_relu3 = nn.ReLU()
+        self.encoder_dropout3 = nn.Dropout(0.5)
+        self.encoder_linear = nn.Linear(3*hidden_dim, hidden_dim)
+        
+        
+        self.temp_dist_net = DenseNetwork(hidden_dim, token_per_node*num_nodes+1) # stack start_arti_info & target_arti_info & proprioceptive
+        
+        
+        self.register_buffer('pos_table', get_sinusoid_encoding_table(1+1+num_nodes+num_queries, hidden_dim)) # [CLS], qpos, a_seq
 
         # decoder extra parameters
         self.latent_out_proj = nn.Linear(self.latent_dim, hidden_dim) # project latent sample to embedding
         
         # arti_mode에 따라 수정
-        self.additional_pos_embed = nn.Embedding(2+1+1, hidden_dim)
+        self.additional_pos_embed = nn.Embedding(2+token_per_node*num_nodes, hidden_dim)
         # self.additional_pos_embed = nn.Embedding(2, hidden_dim) # learned position embedding for proprio and latent
 
-    def forward(self, qpos, image, env_state, actions=None, is_pad=None, arti_info: Dict=None):
+    def forward(self, qpos, image, env_state, actions=None, is_pad=None, arti_info=None):
         """
         qpos: batch, qpos_dim
         image: batch, num_cam, channel, height, width
@@ -145,47 +179,42 @@ class DETRVAE(nn.Module):
         '''
         arti_mode
         '''
-        start_node_features = arti_info['start']['node_features']
-        _, num_nodes, _ = start_node_features.shape
-        start_edge_features = arti_info['start']['edge_features']
-        assert start_edge_features.shape[1] == num_nodes * num_nodes, start_edge_features.shape
-        # mask_features = arti_info['mask_features'].unsqueeze(1)
-        # assert mask_features.shape[1] == num_nodes, mask_features.shape
-
         target_node_features = arti_info['target']['node_features']
+        _, num_nodes, _ = target_node_features.shape
+        
         assert target_node_features.shape[1] == num_nodes
         target_edge_features = arti_info['target']['edge_features']
+        target_edge_features_4d = target_edge_features.view(bs, num_nodes, num_nodes, self.edge_feat_dim)
+        target_edge_features_4d = target_edge_features_4d[..., 0:1].clone() * target_edge_features_4d[..., 1:].clone() 
+        target_edge_features_final = target_edge_features_4d.view(bs, num_nodes, num_nodes * (self.edge_feat_dim-1))
+        
+        
+        
+
+
         assert target_edge_features.shape[1] == num_nodes * num_nodes, target_edge_features.shape
         
         
         '''
-        arti mode
+        for cvae input
         '''
-        start_node_input = self.node_proj(start_node_features)
-        start_edge_input = self.edge_proj(start_edge_features)
-        
-        
-        start_arti_input = self.arti_relu1(torch.concat((start_node_input, start_edge_input), axis=1))
-        start_arti_input = start_arti_input.transpose(2, 1)
-        start_arti_input = self.arti_linear1(start_arti_input)
-        start_arti_input = self.arti_relu2(self.batchnorm2(start_arti_input))
-        start_arti_input = self.dropout2(start_arti_input)
-        start_arti_input = self.arti_linear2(start_arti_input) # bs 1 hidden_dim
-        start_arti_embed = start_arti_input.clone().transpose(-2, -1)
-        
-        
         target_node_input = self.node_proj(target_node_features)
-        target_edge_input = self.edge_proj(target_edge_features)
-        
-        target_arti_input = self.arti_relu1(torch.concat((target_node_input, target_edge_input), axis=1))
-        target_arti_input = target_arti_input.transpose(2, 1)
-        target_arti_input = self.arti_linear1(target_arti_input)
-        target_arti_input = self.arti_relu2(self.batchnorm2(target_arti_input))
-        target_arti_input = self.dropout2(target_arti_input)
-        target_arti_input = self.arti_linear2(target_arti_input) # bs 1 hidden_dim
-        target_arti_embed = target_arti_input.clone().transpose(-2, -1)
+        target_edge_input = self.edge_proj(target_edge_features_final)
         
         
+        target_arti_input = torch.concat((target_node_input, target_edge_input), axis=-1)
+        target_arti_input_clone = target_arti_input.clone()
+        
+        target_arti_input = self.cvae_dropout1(self.cvae_relu1(self.cvae_batchnorm1(self.cvae_arti_conv1(target_arti_input))))
+        target_arti_input = self.cvae_dropout2(self.cvae_relu2(self.cvae_batchnorm2(self.cvae_arti_conv2(target_arti_input))))
+        target_arti_embed = self.cvae_linear(target_arti_input)
+        
+
+        target_arti_input_encoder = self.encoder_dropout1(self.encoder_relu1(self.encoder_batchnorm1(self.encoder_arti_conv1(target_arti_input_clone))))
+        target_arti_input_encoder = self.encoder_dropout2(self.encoder_relu2(self.encoder_batchnorm2(self.encoder_arti_conv2(target_arti_input_encoder))))
+        target_arti_input_encoder = self.encoder_dropout3(self.encoder_relu3(self.encoder_batchnorm3(self.encoder_arti_conv3(target_arti_input_encoder))))
+        target_arti_embed_encoder = self.encoder_linear(target_arti_input_encoder)
+
         
         
         if is_training:
@@ -203,18 +232,17 @@ class DETRVAE(nn.Module):
             # mask_embed = self.mask_head(mask_features)
 
             # encoder_input = torch.cat([cls_embed, node_embed, edge_embed, mask_embed, qpos_embed, action_embed], axis=1) # (bs, seq+1+arti_dim, hidden_dim)
-            encoder_input = torch.cat([cls_embed, start_arti_embed, target_arti_embed, qpos_embed, action_embed], axis=1)  # (bs, seq+1+1+1, hidden_dim)
+            encoder_input = torch.cat([cls_embed, target_arti_embed, qpos_embed, action_embed], axis=1)  # (bs, seq+1+1+1, hidden_dim)
             encoder_input = encoder_input.permute(1, 0, 2) # (seq+1+arti_dim, bs, hidden_dim)
             # do not mask cls token
             cls_joint_is_pad = torch.full((bs, 2), False).to(qpos.device) # False: not a padding
             # arti_joint_is_pad = torch.full((bs, arti_dim), False).to(qpos.device)
-            arti_joint_is_pad = torch.full((bs, 2), False).to(qpos.device)
+            arti_joint_is_pad = torch.full((bs, self.num_nodes), False).to(qpos.device)
 
             is_pad = torch.cat([cls_joint_is_pad, arti_joint_is_pad, is_pad], axis=1)  # (bs, seq+1+arti_dim)
             # obtain position embedding
             pos_embed = self.pos_table.clone().detach()
             pos_embed = pos_embed.permute(1, 0, 2)  # (seq+1, 1, hidden_dim)
-
             # query model
             encoder_output = self.encoder(encoder_input, pos=pos_embed, src_key_padding_mask=is_pad)
             encoder_output = encoder_output[0] # take cls output only
@@ -229,8 +257,8 @@ class DETRVAE(nn.Module):
             latent_input = self.latent_out_proj(latent_sample)
 
         
-        start_arti_input = start_arti_input.squeeze(-1) # bs hidden_dim
-        target_arti_input = target_arti_input.squeeze(-1)
+        # start_arti_input = start_arti_input.squeeze(-1) # bs hidden_dim
+        # target_arti_input = target_arti_input.squeeze(-1)
 
 
         if self.backbones is not None:
@@ -246,13 +274,14 @@ class DETRVAE(nn.Module):
             # proprioception features
             proprio_input = self.input_proj_robot_state(qpos) # bs hidden_dim
             
+            
             # temporal dist
-            temporal_embed = torch.concatenate((start_arti_input, target_arti_input, proprio_input), axis=-1)
+            temporal_embed = torch.concatenate((target_arti_embed_encoder, proprio_input.unsqueeze(1)), axis=1)
             pred_temporal_dist = self.temp_dist_net(temporal_embed)
             # fold camera dimension into width dimension
             src = torch.cat(all_cam_features, axis=3)
             pos = torch.cat(all_cam_pos, axis=3)
-            hs = self.transformer(src, None, self.query_embed.weight, pos, latent_input, proprio_input, (start_arti_input, target_arti_input), self.additional_pos_embed.weight)[0]
+            hs = self.transformer(src, None, self.query_embed.weight, pos, latent_input, proprio_input, (target_arti_embed_encoder), self.additional_pos_embed.weight)[0]
         else:
             raise NotImplementedError
             qpos = self.input_proj_robot_state(qpos)
@@ -369,7 +398,8 @@ def build(args):
     edge_feat_dim = args.edge_feat_dim
     image_shape = args.image_shape
     num_nodes = args.num_nodes
-
+    token_per_node = args.token_per_node
+    
     model = DETRVAE(
         backbones,
         transformer,
@@ -381,6 +411,8 @@ def build(args):
         edge_feat_dim=edge_feat_dim,
         image_shape=image_shape,
         num_nodes=num_nodes,
+        token_per_node=token_per_node,
+
         
     )
 
