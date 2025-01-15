@@ -213,6 +213,7 @@ def main(args):
                          'num_queries': args['chunk_size'],
                          'kl_weight': args['kl_weight'],
                          'temporal_weight': args['temporal_weight'],
+                         'token_per_node': args['token_per_node'],
                          'hidden_dim': args['hidden_dim'],
                          'dim_feedforward': args['dim_feedforward'],
                          'lr_backbone': lr_backbone,
@@ -724,15 +725,19 @@ if __name__ == '__main__':
     parser.add_argument('--num_epochs', action='store', type=int, help='num_epochs', required=True)
     parser.add_argument('--lr', action='store', type=float, help='lr', required=True)
 
+
     # for ACT
     parser.add_argument('--kl_weight', action='store', type=int, help='KL Weight', required=False)
     # added in 0112 for temporal diatance loss
     parser.add_argument('--temporal_weight', type=float, help='Temporal Weight', required=True)
+    parser.add_argument('--token_per_node', type=int, help='token_per_node')
+
 
     parser.add_argument('--chunk_size', action='store', type=int, help='chunk_size', required=False)
     parser.add_argument('--hidden_dim', action='store', type=int, help='hidden_dim', required=False)
     parser.add_argument('--dim_feedforward', action='store', type=int, help='dim_feedforward', required=False)
     parser.add_argument('--temporal_agg', action='store_true')
+    
     
     # for gello
     parser.add_argument('--gello_dir', action='store', default='../', type=str)

@@ -58,8 +58,13 @@ class Transformer(nn.Module):
 
             additional_pos_embed = additional_pos_embed.unsqueeze(1).repeat(1, bs, 1) # seq, bs, dim
             pos_embed = torch.cat([additional_pos_embed, pos_embed], axis=0)
-            addition_input = torch.stack([latent_input, proprio_input, arti_input[0], arti_input[1]], axis=0)
-            src = torch.cat([addition_input, src], axis=0)
+            addition_input = torch.stack([latent_input, proprio_input], axis=0)
+
+            start_arti_input, target_arti_input = arti_input
+            start_arti_input = start_arti_input.permute(1, 0, 2)
+            target_arti_input = target_arti_input.permute(1, 0, 2) 
+            
+            src = torch.cat([addition_input, start_arti_input, target_arti_input, src], axis=0)
         else:
             assert len(src.shape) == 3
             # flatten NxHWxC to HWxNxC
@@ -69,10 +74,10 @@ class Transformer(nn.Module):
             query_embed = query_embed.unsqueeze(1).repeat(1, bs, 1)
 
         tgt = torch.zeros_like(query_embed)
-        memory = self.encoder(src, src_key_padding_mask=mask, pos=pos_embed)
+        memory = self.encoder(src, src_key_padding_mask=mask, pos=pos_embed) # memory: 604, 15, 512
         hs = self.decoder(tgt, memory, memory_key_padding_mask=mask,
-                          pos=pos_embed, query_pos=query_embed)
-        hs = hs.transpose(1, 2)
+                          pos=pos_embed, query_pos=query_embed)  # 7, 50, 15, 512
+        hs = hs.transpose(1, 2) # 7, 50, 512, 15
         return hs
 
 class TransformerEncoder(nn.Module):
