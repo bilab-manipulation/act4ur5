@@ -3,15 +3,15 @@ import pathlib
 ### Task parameters
 DATA_DIR = '.'
 TASK_CONFIGS = {
-    'pilot':{
-        'dataset_dir': DATA_DIR + '/pilot',
-        'num_episodes': 100,
-        'episode_len': 300,
-        'camera_names': ['wrist', 'base'],
+    'out_250319':{
+        'dataset_dir': DATA_DIR + '/out_250319',
+        'num_episodes': 50,
+        'episode_len': 180,
+        'camera_names': ['front'],
         # 'camera_names': ['wrist_left', 'wrist_right', 'base'],
         'ckpt_names': ['policy_last.ckpt'],
         'base_crop': False, # whether to crop the base image or not (mbn demo)
-        'state_dim': 7,
+        'state_dim': 14,
         'touch_feedback': False,
     },
  

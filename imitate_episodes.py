@@ -58,104 +58,110 @@ def main(args):
 
         print("=======TOUCH FEEDBACK ON!=========")
     
-    if os.path.isdir(args['gello_dir']):
-        sys.path.append(args['gello_dir'])
-        from gello.env import RobotEnv # type: ignore
-        from gello.zmq_core.robot_node import ZMQClientRobot # type: ignore
-        from gello.cameras.realsense_camera import LogitechCamera, RealSenseCamera, get_device_ids # type: ignore
-        if len(camera_names) >= 2:
-            if state_dim == 14:
-                ## 먼저 realsense수 체크
-                ids = get_device_ids()
-                camera_clients = {}
-                for id in ids:
-                    if id == '033422070567': #left camera
-                        camera_clients["wrist_left"] = RealSenseCamera(device_id=id)
-                    elif id == '021222071327':
-                        camera_clients["wrist_right"] = RealSenseCamera(device_id=id)
+    if is_eval:
+        if os.path.isdir(args['gello_dir']):
+            sys.path.append(args['gello_dir'])
+            from gello.env import RobotEnv # type: ignore
+            from gello.zmq_core.robot_node import ZMQClientRobot # type: ignore
+            from gello.cameras.realsense_camera import LogitechCamera, RealSenseCamera, get_device_ids # type: ignore
+            if len(camera_names) >= 2:
+                if state_dim == 14:
+                    ## 먼저 realsense수 체크
+                    ids = get_device_ids()
+                    camera_clients = {}
+                    for id in ids:
+                        if id == '033422070567': #left camera
+                            camera_clients["wrist_left"] = RealSenseCamera(device_id=id)
+                        elif id == '021222071327':
+                            camera_clients["wrist_right"] = RealSenseCamera(device_id=id)
+                            
+                    camera_clients["base"] = LogitechCamera(device_id='/dev/frontcam')
+                else:
+                    print("DUAL CAMERA!!!")
+                    camera_clients = {
+                        # you can optionally add camera nodes here for imitation learning purposes
+                        "wrist": RealSenseCamera(),
+                        "base": LogitechCamera(device_id='/dev/frontcam')
                         
-                camera_clients["base"] = LogitechCamera(device_id='/dev/frontcam')
+                    }
+                print("FINISH")
             else:
-                print("DUAL CAMERA!!!")
-                camera_clients = {
-                    # you can optionally add camera nodes here for imitation learning purposes
-                    "wrist": RealSenseCamera(),
-                    "base": LogitechCamera(device_id='/dev/frontcam')
-                    
-                }
-            print("FINISH")
-        else:
+                if state_dim == 14:
+                    camera_clients = {}
+                    camera_clients["front"] = RealSenseCamera(device_id = '327122077410')
+                    #ids = get_device_ids()
+                    #assert len(ids) <= 1, f"Only one realsense camera is connected:, {ids}"
+                    #camera_clients["wrist"] = RealSenseCamera()
+                    #camera_clients["base"] = LogitechCamera(device_id='/dev/frontcam')
+                else:
+                    camera_clients = {
+                        # you can optionally add camera nodes here for imitation learning purposes
+                        # "wrist": ZMQClientCamera(port=args.wrist_camera_port, host=args.hostname),
+                        # "base": ZMQClientCamera(port=args.base_camera_port, host=args.hostname),
+                        "wrist": LogitechCamera(device_id='/dev/frontcam')
+                    }
+            robot_client = ZMQClientRobot(port=6001, host="127.0.0.1")
+            env = RobotEnv(robot_client, control_rate_hz=30, camera_dict=camera_clients)
+
             if state_dim == 14:
-                camera_clients = {}
-                ids = get_device_ids()
-                assert len(ids) <= 1, f"Only one realsense camera is connected:, {ids}"
-                camera_clients["wrist"] = RealSenseCamera()
-                camera_clients["base"] = LogitechCamera(device_id='/dev/frontcam')
-            else:
-                camera_clients = {
-                    # you can optionally add camera nodes here for imitation learning purposes
-                    # "wrist": ZMQClientCamera(port=args.wrist_camera_port, host=args.hostname),
-                    # "base": ZMQClientCamera(port=args.base_camera_port, host=args.hostname),
-                    "wrist": LogitechCamera(device_id='/dev/frontcam')
-                }
-        robot_client = ZMQClientRobot(port=6001, host="127.0.0.1")
-        env = RobotEnv(robot_client, control_rate_hz=50, camera_dict=camera_clients)
-
-        if state_dim == 14:
-            # dynamixel control box port map (to distinguish left and right gello)
-            
-            # 1119 세팅에 맞게 변경
-            # right = "/dev/serial/by-id/usb-FTDI_USB__-__Serial_Converter_FT94EKG0-if00-port0"
-            # left = "/dev/serial/by-id/usb-FTDI_USB__-__Serial_Converter_FT9BTGRS-if00-port0"
-            # left_agent = GelloAgent(port=left)
-            # right_agent = GelloAgent(port=right)
-            # agent = BimanualAgent(left_agent, right_agent)
-            # print("gellos,")
-
-            ## 1119 세팅!! TODO 바꿔야함
-            reset_joints_left = np.deg2rad([149, -58, -134, -77, 87, -45, 0])
-            reset_joints_right = np.deg2rad([-143, -112, 127, -104, -93, 45, 0])
-            reset_joints = np.concatenate([reset_joints_left, reset_joints_right])
-            curr_joints = env.get_obs()["joint_positions"]
-            max_delta = (np.abs(curr_joints - reset_joints)).max()
-            steps = min(int(max_delta / 0.01), 100)
-
-            for jnt in np.linspace(curr_joints, reset_joints, steps):
-                env.step(jnt)
-        else:
-            it = 1 # right robot
-            if it == 0:
-                reset_joints = np.deg2rad(
-                    [149, -58, -134, -77, 87, -45, 0], # left
-                    # [-180, -120, 135, -90, -90, -90, 0],
-                    # [-90, -90, 90, -90, -90, 0, 0]
-                    # [0, -90, 90, -90, -90, 0, 0]
-                )  # Change this to your own reset joints
-            else:
-                reset_joints = np.deg2rad(
-                    # [180, -60, -135, -90, 90, 90, 0], # left
-                    [-143, -112, 127, -104, -93, 45, 0], #right
-                    # [-90, -90, 90, -90, -90, 0, 0]
-                    # [0, -90, 90, -90, -90, 0, 0]
-                )
+                # dynamixel control box port map (to distinguish left and right gello)
                 
-                # agent = GelloAgent(port=gello_port, start_joints=args.start_joints)
+                # 1119 세팅에 맞게 변경
+                # right = "/dev/serial/by-id/usb-FTDI_USB__-__Serial_Converter_FT94EKG0-if00-port0"
+                # left = "/dev/serial/by-id/usb-FTDI_USB__-__Serial_Converter_FT9BTGRS-if00-port0"
+                # left_agent = GelloAgent(port=left)
+                # right_agent = GelloAgent(port=right)
+                # agent = BimanualAgent(left_agent, right_agent)
+                # print("gellos,")
+
+                ## 1119 세팅!! TODO 바꿔야함
+                reset_joints_left = np.deg2rad([-90, -90, -90, -90, 90, 0, 0])
+                reset_joints_right = np.deg2rad([90, -90, 90, -90, -90, 180, 0, 0])
+                reset_joints = np.concatenate([reset_joints_left, reset_joints_right])
                 curr_joints = env.get_obs()["joint_positions"]
-                if reset_joints.shape == curr_joints.shape:
-                    max_delta = (np.abs(curr_joints - reset_joints)).max()
-                    steps = min(int(max_delta / 0.01), 100)
+                print('virtualkss_start:')
+                max_delta = (np.abs(curr_joints - reset_joints)).max()
+                steps = min(int(max_delta / 0.01), 100)
 
-                    for jnt in np.linspace(curr_joints, reset_joints, steps):
-                        env.step(jnt)
-                        time.sleep(0.001)
-        
-        # going to start position
-        print("Going to start position")
+                print('virtualkss_end:')
+                    
 
-        time.sleep(1)
-    else:
-        print("GELLO MODULE DIRECTORY WRONG")
-        exit(1)
+                for jnt in np.linspace(curr_joints, reset_joints, steps):
+                    env.step(jnt)
+            else:
+                it = 1 # right robot
+                if it == 0:
+                    reset_joints = np.deg2rad(
+                        [149, -58, -134, -77, 87, -45, 0], # left
+                        # [-180, -120, 135, -90, -90, -90, 0],
+                        # [-90, -90, 90, -90, -90, 0, 0]
+                        # [0, -90, 90, -90, -90, 0, 0]
+                    )  # Change this to your own reset joints
+                else:
+                    reset_joints = np.deg2rad(
+                        # [180, -60, -135, -90, 90, 90, 0], # left
+                        [-143, -112, 127, -104, -93, 45, 0], #right
+                        # [-90, -90, 90, -90, -90, 0, 0]
+                        # [0, -90, 90, -90, -90, 0, 0]
+                    )
+                    
+                    # agent = GelloAgent(port=gello_port, start_joints=args.start_joints)
+                    curr_joints = env.get_obs()["joint_positions"]
+                    if reset_joints.shape == curr_joints.shape:
+                        max_delta = (np.abs(curr_joints - reset_joints)).max()
+                        steps = min(int(max_delta / 0.01), 100)
+
+                        for jnt in np.linspace(curr_joints, reset_joints, steps):
+                            env.step(jnt)
+                            time.sleep(0.001)
+            
+            # going to start position
+            print("Going to start position")
+
+            time.sleep(1)
+        else:
+            print("GELLO MODULE DIRECTORY WRONG")
+            exit(1)
     
 
 

@@ -14,10 +14,12 @@ SESSION_NAME="launch_nodes_acct"
 tmux new-session -d -s "$SESSION_NAME"
 
 # for BIMANUAL SETTING
-# tmux send-keys -t $SESSION_NAME:0 "bash -i -c 'conda activate gello && python experiments/launch_nodes.py --robot bimanual_ur'" C-m
+#tmux send-keys -t $SESSION_NAME:0 "bash -i -c 'conda activate gello && python experiments/launch_nodes.py --robot bimanual_ur'" C-m
 
 # for UNIMANUAL SETTING
-tmux send-keys -t "$SESSION_NAME:0" "cd /home/biomen/projects/gello_software/ && bash -i -c 'conda activate gello && python experiments/launch_nodes.py --robot ur --robot_ip 192.168.0.4'" C-m
+#tmux send-keys -t "$SESSION_NAME:0" "cd /home/biomen/projects/gello_software/ && bash -i -c 'conda activate gello && python experiments/launch_nodes.py --robot ur --robot_ip 192.168.0.4'" C-m
+tmux send-keys -t "$SESSION_NAME:0" "cd /home/biadmin/Desktop/gello_software/ && bash -i -c 'conda activate gello && python experiments/launch_nodes.py --robot bimanual_ur --robot_ip 192.168.0.44'" C-m
+tmux send-keys -t "$SESSION_NAME:0" "cd /home/biadmin/Desktop/gello_software/ && bash -i -c 'conda activate gello && python experiments/launch_nodes.py --robot bimanual_ur --robot_ip 192.168.0.43'" C-m
 
 tmux split-window -v -t "$SESSION_NAME:0"
 tmux send-keys -t "$SESSION_NAME:0.1" "bash -i -c 'conda activate aloha && python3 imitate_episodes.py --task_name ${TASK_NAME} \
